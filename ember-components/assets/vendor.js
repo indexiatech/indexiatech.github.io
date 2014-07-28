@@ -72198,6 +72198,784 @@ if (typeof jQuery === 'undefined') { throw new Error('Bootstrap\'s JavaScript re
 }));
 
 
+;// ==========================================================================
+// Project:   Ember Validations
+// Copyright: Copyright 2013 DockYard, LLC. and contributors.
+// License:   Licensed under MIT license (see license.js)
+// ==========================================================================
+
+
+// Version: 1.0.0.beta.2
+
+(function() {
+    Ember.Validations = Ember.Namespace.create({
+        VERSION: '1.0.0.beta.2'
+    });
+
+})();
+
+
+
+(function() {
+    Ember.Validations.messages = {
+        render: function(attribute, context) {
+            if (Ember.I18n) {
+                return Ember.I18n.t('errors.' + attribute, context);
+            } else {
+                var regex = new RegExp("{{(.*?)}}"),
+                    attributeName = "";
+                if (regex.test(this.defaults[attribute])) {
+                    attributeName = regex.exec(this.defaults[attribute])[1];
+                }
+                return this.defaults[attribute].replace(regex, context[attributeName]);
+            }
+        },
+        defaults: {
+            inclusion: "is not included in the list",
+            exclusion: "is reserved",
+            invalid: "is invalid",
+            confirmation: "doesn't match {{attribute}}",
+            accepted: "must be accepted",
+            empty: "can't be empty",
+            blank: "can't be blank",
+            present: "must be blank",
+            tooLong: "is too long (maximum is {{count}} characters)",
+            tooShort: "is too short (minimum is {{count}} characters)",
+            wrongLength: "is the wrong length (should be {{count}} characters)",
+            notANumber: "is not a number",
+            notAnInteger: "must be an integer",
+            greaterThan: "must be greater than {{count}}",
+            greaterThanOrEqualTo: "must be greater than or equal to {{count}}",
+            equalTo: "must be equal to {{count}}",
+            lessThan: "must be less than {{count}}",
+            lessThanOrEqualTo: "must be less than or equal to {{count}}",
+            otherThan: "must be other than {{count}}",
+            odd: "must be odd",
+            even: "must be even",
+            url: "is not a valid URL"
+        }
+    };
+
+})();
+
+
+
+(function() {
+    Ember.Validations.Errors = Ember.Object.extend({
+        unknownProperty: function(property) {
+            this.set(property, Ember.makeArray());
+            return this.get(property);
+        }
+    });
+
+})();
+
+
+
+(function() {
+    var setValidityMixin = Ember.Mixin.create({
+        isValid: function() {
+            return this.get('validators').compact().filterBy('isValid', false).get('length') === 0;
+        }.property('validators.@each.isValid'),
+        isInvalid: Ember.computed.not('isValid')
+    });
+
+    var pushValidatableObject = function(model, property) {
+        var content = model.get(property);
+
+        model.removeObserver(property, pushValidatableObject);
+        if (Ember.isArray(content)) {
+            model.validators.pushObject(ArrayValidatorProxy.create({model: model, property: property, contentBinding: 'model.' + property}));
+        } else {
+            model.validators.pushObject(content);
+        }
+    };
+
+    var findValidator = function(validator) {
+        var klass = validator.classify();
+        return Ember.Validations.validators.local[klass] || Ember.Validations.validators.remote[klass];
+    };
+
+    var ArrayValidatorProxy = Ember.ArrayProxy.extend(setValidityMixin, {
+        validate: function() {
+            return this._validate();
+        },
+        _validate: function() {
+            var promises = this.get('content').invoke('_validate').without(undefined);
+            return Ember.RSVP.all(promises);
+        }.on('init'),
+        validators: Ember.computed.alias('content')
+    });
+
+    Ember.Validations.Mixin = Ember.Mixin.create(setValidityMixin, {
+        init: function() {
+            this._super();
+            this.errors = Ember.Validations.Errors.create();
+            this._dependentValidationKeys = {};
+            this.validators = Ember.makeArray();
+            if (this.get('validations') === undefined) {
+                this.validations = {};
+            }
+            this.buildValidators();
+            this.validators.forEach(function(validator) {
+                validator.addObserver('errors.@each', this, function(sender, key, value, context, rev) {
+                    var errors = Ember.makeArray();
+                    this.validators.forEach(function(validator) {
+                        if (validator.property === sender.property) {
+                            errors = errors.concat(validator.errors);
+                        }
+                    }, this);
+                    this.set('errors.' + sender.property, errors);
+                });
+            }, this);
+        },
+        buildValidators: function() {
+            var property, validator;
+
+            for (property in this.validations) {
+                if (this.validations[property].constructor === Object) {
+                    this.buildRuleValidator(property);
+                } else {
+                    this.buildObjectValidator(property);
+                }
+            }
+        },
+        buildRuleValidator: function(property) {
+            var validator;
+            for (validator in this.validations[property]) {
+                if (this.validations[property].hasOwnProperty(validator)) {
+                    this.validators.pushObject(findValidator(validator).create({model: this, property: property, options: this.validations[property][validator]}));
+                }
+            }
+        },
+        buildObjectValidator: function(property) {
+            if (Ember.isNone(this.get(property))) {
+                this.addObserver(property, this, pushValidatableObject);
+            } else {
+                pushValidatableObject(this, property);
+            }
+        },
+        validate: function() {
+            var self = this;
+            return this._validate().then(function(vals) {
+                var errors = self.get('errors');
+                if (vals.contains(false)) {
+                    return Ember.RSVP.reject(errors);
+                }
+                return errors;
+            });
+        },
+        _validate: function() {
+            var promises = this.validators.invoke('_validate').without(undefined);
+            return Ember.RSVP.all(promises);
+        }.on('init')
+    });
+
+})();
+
+
+
+(function() {
+    Ember.Validations.patterns = Ember.Namespace.create({
+        numericality: /^(-|\+)?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d*)?$/,
+        blank: /^\s*$/
+    });
+
+})();
+
+
+
+(function() {
+    Ember.Validations.validators        = Ember.Namespace.create();
+    Ember.Validations.validators.local  = Ember.Namespace.create();
+    Ember.Validations.validators.remote = Ember.Namespace.create();
+
+})();
+
+
+
+(function() {
+    Ember.Validations.validators.Base = Ember.Object.extend({
+        init: function() {
+            this.set('errors', Ember.makeArray());
+            this._dependentValidationKeys = Ember.makeArray();
+            this.conditionals = {
+                'if': this.get('options.if'),
+                unless: this.get('options.unless')
+            };
+            this.model.addObserver(this.property, this, this._validate);
+        },
+        addObserversForDependentValidationKeys: function() {
+            this._dependentValidationKeys.forEach(function(key) {
+                this.model.addObserver(key, this, this._validate);
+            }, this);
+        }.on('init'),
+        pushDependentValidationKeyToModel: function() {
+            var model = this.get('model');
+            if (model._dependentValidationKeys[this.property] === undefined) {
+                model._dependentValidationKeys[this.property] = Ember.makeArray();
+            }
+            model._dependentValidationKeys[this.property].addObjects(this._dependentValidationKeys);
+        }.on('init'),
+        call: function () {
+            throw 'Not implemented!';
+        },
+        unknownProperty: function(key) {
+            var model = this.get('model');
+            if (model) {
+                return model.get(key);
+            }
+        },
+        isValid: Ember.computed.empty('errors.[]'),
+        validate: function() {
+            var self = this;
+            return this._validate().then(function(success) {
+                // Convert validation failures to rejects.
+                var errors = self.get('model.errors');
+                if (success) {
+                    return errors;
+                } else {
+                    return Ember.RSVP.reject(errors);
+                }
+            });
+        },
+        _validate: function() {
+            this.errors.clear();
+            if (this.canValidate()) {
+                this.call();
+            }
+            if (this.get('isValid')) {
+                return Ember.RSVP.resolve(true);
+            } else {
+                return Ember.RSVP.resolve(false);
+            }
+        }.on('init'),
+        canValidate: function() {
+            if (typeof(this.conditionals) === 'object') {
+                if (this.conditionals['if']) {
+                    if (typeof(this.conditionals['if']) === 'function') {
+                        return this.conditionals['if'](this.model, this.property);
+                    } else if (typeof(this.conditionals['if']) === 'string') {
+                        if (typeof(this.model[this.conditionals['if']]) === 'function') {
+                            return this.model[this.conditionals['if']]();
+                        } else {
+                            return this.model.get(this.conditionals['if']);
+                        }
+                    }
+                } else if (this.conditionals.unless) {
+                    if (typeof(this.conditionals.unless) === 'function') {
+                        return !this.conditionals.unless(this.model, this.property);
+                    } else if (typeof(this.conditionals.unless) === 'string') {
+                        if (typeof(this.model[this.conditionals.unless]) === 'function') {
+                            return !this.model[this.conditionals.unless]();
+                        } else {
+                            return !this.model.get(this.conditionals.unless);
+                        }
+                    }
+                } else {
+                    return true;
+                }
+            } else {
+                return true;
+            }
+        }
+    });
+
+})();
+
+
+
+(function() {
+    Ember.Validations.validators.local.Absence = Ember.Validations.validators.Base.extend({
+        init: function() {
+            this._super();
+            /*jshint expr:true*/
+            if (this.options === true) {
+                this.set('options', {});
+            }
+
+            if (this.options.message === undefined) {
+                this.set('options.message', Ember.Validations.messages.render('present', this.options));
+            }
+        },
+        call: function() {
+            if (!Ember.isEmpty(this.model.get(this.property))) {
+                this.errors.pushObject(this.options.message);
+            }
+        }
+    });
+
+})();
+
+
+
+(function() {
+    Ember.Validations.validators.local.Acceptance = Ember.Validations.validators.Base.extend({
+        init: function() {
+            this._super();
+            /*jshint expr:true*/
+            if (this.options === true) {
+                this.set('options', {});
+            }
+
+            if (this.options.message === undefined) {
+                this.set('options.message', Ember.Validations.messages.render('accepted', this.options));
+            }
+        },
+        call: function() {
+            if (this.options.accept) {
+                if (this.model.get(this.property) !== this.options.accept) {
+                    this.errors.pushObject(this.options.message);
+                }
+            } else if (this.model.get(this.property) !== '1' && this.model.get(this.property) !== 1 && this.model.get(this.property) !== true) {
+                this.errors.pushObject(this.options.message);
+            }
+        }
+    });
+
+})();
+
+
+
+(function() {
+    Ember.Validations.validators.local.Confirmation = Ember.Validations.validators.Base.extend({
+        init: function() {
+            this.originalProperty = this.property;
+            this.property = this.property + 'Confirmation';
+            this._super();
+            this._dependentValidationKeys.pushObject(this.originalProperty);
+            /*jshint expr:true*/
+            if (this.options === true) {
+                this.set('options', { attribute: this.originalProperty });
+                this.set('options', { message: Ember.Validations.messages.render('confirmation', this.options) });
+            }
+        },
+        call: function() {
+            if (this.model.get(this.originalProperty) !== this.model.get(this.property)) {
+                this.errors.pushObject(this.options.message);
+            }
+        }
+    });
+
+})();
+
+
+
+(function() {
+    Ember.Validations.validators.local.Exclusion = Ember.Validations.validators.Base.extend({
+        init: function() {
+            this._super();
+            if (this.options.constructor === Array) {
+                this.set('options', { 'in': this.options });
+            }
+
+            if (this.options.message === undefined) {
+                this.set('options.message', Ember.Validations.messages.render('exclusion', this.options));
+            }
+        },
+        call: function() {
+            /*jshint expr:true*/
+            var message, lower, upper;
+
+            if (Ember.isEmpty(this.model.get(this.property))) {
+                if (this.options.allowBlank === undefined) {
+                    this.errors.pushObject(this.options.message);
+                }
+            } else if (this.options['in']) {
+                if (Ember.$.inArray(this.model.get(this.property), this.options['in']) !== -1) {
+                    this.errors.pushObject(this.options.message);
+                }
+            } else if (this.options.range) {
+                lower = this.options.range[0];
+                upper = this.options.range[1];
+
+                if (this.model.get(this.property) >= lower && this.model.get(this.property) <= upper) {
+                    this.errors.pushObject(this.options.message);
+                }
+            }
+        }
+    });
+
+})();
+
+
+
+(function() {
+    Ember.Validations.validators.local.Format = Ember.Validations.validators.Base.extend({
+        init: function() {
+            this._super();
+            if (this.options.constructor === RegExp) {
+                this.set('options', { 'with': this.options });
+            }
+
+            if (this.options.message === undefined) {
+                this.set('options.message',  Ember.Validations.messages.render('invalid', this.options));
+            }
+        },
+        call: function() {
+            if (Ember.isEmpty(this.model.get(this.property))) {
+                if (this.options.allowBlank === undefined) {
+                    this.errors.pushObject(this.options.message);
+                }
+            } else if (this.options['with'] && !this.options['with'].test(this.model.get(this.property))) {
+                this.errors.pushObject(this.options.message);
+            } else if (this.options.without && this.options.without.test(this.model.get(this.property))) {
+                this.errors.pushObject(this.options.message);
+            }
+        }
+    });
+
+})();
+
+
+
+(function() {
+    Ember.Validations.validators.local.Inclusion = Ember.Validations.validators.Base.extend({
+        init: function() {
+            this._super();
+            if (this.options.constructor === Array) {
+                this.set('options', { 'in': this.options });
+            }
+
+            if (this.options.message === undefined) {
+                this.set('options.message', Ember.Validations.messages.render('inclusion', this.options));
+            }
+        },
+        call: function() {
+            var message, lower, upper;
+            if (Ember.isEmpty(this.model.get(this.property))) {
+                if (this.options.allowBlank === undefined) {
+                    this.errors.pushObject(this.options.message);
+                }
+            } else if (this.options['in']) {
+                if (Ember.$.inArray(this.model.get(this.property), this.options['in']) === -1) {
+                    this.errors.pushObject(this.options.message);
+                }
+            } else if (this.options.range) {
+                lower = this.options.range[0];
+                upper = this.options.range[1];
+
+                if (this.model.get(this.property) < lower || this.model.get(this.property) > upper) {
+                    this.errors.pushObject(this.options.message);
+                }
+            }
+        }
+    });
+
+})();
+
+
+
+(function() {
+    Ember.Validations.validators.local.Length = Ember.Validations.validators.Base.extend({
+        init: function() {
+            var index, key;
+            this._super();
+            /*jshint expr:true*/
+            if (typeof(this.options) === 'number') {
+                this.set('options', { 'is': this.options });
+            }
+
+            if (this.options.messages === undefined) {
+                this.set('options.messages', {});
+            }
+
+            for (index = 0; index < this.messageKeys().length; index++) {
+                key = this.messageKeys()[index];
+                if (this.options[key] !== undefined && this.options[key].constructor === String) {
+                    this.model.addObserver(this.options[key], this, this._validate);
+                }
+            }
+
+            this.options.tokenizer = this.options.tokenizer || function(value) { return value.split(''); };
+            // if (typeof(this.options.tokenizer) === 'function') {
+            // debugger;
+            // // this.tokenizedLength = new Function('value', 'return '
+            // } else {
+            // this.tokenizedLength = new Function('value', 'return (value || "").' + (this.options.tokenizer || 'split("")') + '.length');
+            // }
+        },
+        CHECKS: {
+            'is'      : '==',
+            'minimum' : '>=',
+            'maximum' : '<='
+        },
+        MESSAGES: {
+            'is'      : 'wrongLength',
+            'minimum' : 'tooShort',
+            'maximum' : 'tooLong'
+        },
+        getValue: function(key) {
+            if (this.options[key].constructor === String) {
+                return this.model.get(this.options[key]) || 0;
+            } else {
+                return this.options[key];
+            }
+        },
+        messageKeys: function() {
+            return Ember.keys(this.MESSAGES);
+        },
+        checkKeys: function() {
+            return Ember.keys(this.CHECKS);
+        },
+        renderMessageFor: function(key) {
+            var options = {count: this.getValue(key)}, _key;
+            for (_key in this.options) {
+                options[_key] = this.options[_key];
+            }
+
+            return this.options.messages[this.MESSAGES[key]] || Ember.Validations.messages.render(this.MESSAGES[key], options);
+        },
+        renderBlankMessage: function() {
+            if (this.options.is) {
+                return this.renderMessageFor('is');
+            } else if (this.options.minimum) {
+                return this.renderMessageFor('minimum');
+            }
+        },
+        call: function() {
+            var check, fn, message, operator, key;
+
+            if (Ember.isEmpty(this.model.get(this.property))) {
+                if (this.options.allowBlank === undefined && (this.options.is || this.options.minimum)) {
+                    this.errors.pushObject(this.renderBlankMessage());
+                }
+            } else {
+                for (key in this.CHECKS) {
+                    operator = this.CHECKS[key];
+                    if (!this.options[key]) {
+                        continue;
+                    }
+
+                    fn = new Function('return ' + this.options.tokenizer(this.model.get(this.property)).length + ' ' + operator + ' ' + this.getValue(key));
+                    if (!fn()) {
+                        this.errors.pushObject(this.renderMessageFor(key));
+                    }
+                }
+            }
+        }
+    });
+
+})();
+
+
+
+(function() {
+    Ember.Validations.validators.local.Numericality = Ember.Validations.validators.Base.extend({
+        init: function() {
+            /*jshint expr:true*/
+            var index, keys, key;
+            this._super();
+
+            if (this.options === true) {
+                this.options = {};
+            } else if (this.options.constructor === String) {
+                key = this.options;
+                this.options = {};
+                this.options[key] = true;
+            }
+
+            if (this.options.messages === undefined || this.options.messages.numericality === undefined) {
+                this.options.messages = this.options.messages || {};
+                this.options.messages = { numericality: Ember.Validations.messages.render('notANumber', this.options) };
+            }
+
+            if (this.options.onlyInteger !== undefined && this.options.messages.onlyInteger === undefined) {
+                this.options.messages.onlyInteger = Ember.Validations.messages.render('notAnInteger', this.options);
+            }
+
+            keys = Ember.keys(this.CHECKS).concat(['odd', 'even']);
+            for(index = 0; index < keys.length; index++) {
+                key = keys[index];
+
+                if (isNaN(this.options[key])) {
+                    this.model.addObserver(this.options[key], this, this._validate);
+                }
+
+                if (this.options[key] !== undefined && this.options.messages[key] === undefined) {
+                    if (Ember.$.inArray(key, Ember.keys(this.CHECKS)) !== -1) {
+                        this.options.count = this.options[key];
+                    }
+                    this.options.messages[key] = Ember.Validations.messages.render(key, this.options);
+                    if (this.options.count !== undefined) {
+                        delete this.options.count;
+                    }
+                }
+            }
+        },
+        CHECKS: {
+            equalTo              :'===',
+            greaterThan          : '>',
+            greaterThanOrEqualTo : '>=',
+            lessThan             : '<',
+            lessThanOrEqualTo    : '<='
+        },
+        call: function() {
+            var check, checkValue, fn, form, operator, val;
+
+            if (Ember.isEmpty(this.model.get(this.property))) {
+                if (this.options.allowBlank === undefined) {
+                    this.errors.pushObject(this.options.messages.numericality);
+                }
+            } else if (!Ember.Validations.patterns.numericality.test(this.model.get(this.property))) {
+                this.errors.pushObject(this.options.messages.numericality);
+            } else if (this.options.onlyInteger === true && !(/^[+\-]?\d+$/.test(this.model.get(this.property)))) {
+                this.errors.pushObject(this.options.messages.onlyInteger);
+            } else if (this.options.odd  && parseInt(this.model.get(this.property), 10) % 2 === 0) {
+                this.errors.pushObject(this.options.messages.odd);
+            } else if (this.options.even && parseInt(this.model.get(this.property), 10) % 2 !== 0) {
+                this.errors.pushObject(this.options.messages.even);
+            } else {
+                for (check in this.CHECKS) {
+                    operator = this.CHECKS[check];
+
+                    if (this.options[check] === undefined) {
+                        continue;
+                    }
+
+                    if (!isNaN(parseFloat(this.options[check])) && isFinite(this.options[check])) {
+                        checkValue = this.options[check];
+                    } else if (this.model.get(this.options[check]) !== undefined) {
+                        checkValue = this.model.get(this.options[check]);
+                    }
+
+                    fn = new Function('return ' + this.model.get(this.property) + ' ' + operator + ' ' + checkValue);
+
+                    if (!fn()) {
+                        this.errors.pushObject(this.options.messages[check]);
+                    }
+                }
+            }
+        }
+    });
+
+})();
+
+
+
+(function() {
+    Ember.Validations.validators.local.Presence = Ember.Validations.validators.Base.extend({
+        init: function() {
+            this._super();
+            /*jshint expr:true*/
+            if (this.options === true) {
+                this.options = {};
+            }
+
+            if (this.options.message === undefined) {
+                this.options.message = Ember.Validations.messages.render('blank', this.options);
+            }
+        },
+        call: function() {
+            if (Ember.isEmpty(this.model.get(this.property))) {
+                this.errors.pushObject(this.options.message);
+            }
+        }
+    });
+
+})();
+
+
+
+(function() {
+    Ember.Validations.validators.local.Url = Ember.Validations.validators.Base.extend({
+        regexp: null,
+        regexp_ip: null,
+
+        init: function() {
+            this._super();
+
+            if (this.get('options.message') === undefined) {
+                this.set('options.message', Ember.Validations.messages.render('url', this.options));
+            }
+
+            if (this.get('options.protocols') === undefined) {
+                this.set('options.protocols', ['http', 'https']);
+            }
+
+            // Regular Expression Parts
+            var dec_octet = '(25[0-5]|2[0-4][0-9]|[0-1][0-9][0-9]|[1-9][0-9]|[0-9])'; // 0-255
+            var ipaddress = '(' + dec_octet + '(\\.' + dec_octet + '){3})';
+            var hostname = '([a-zA-Z0-9\\-]+\\.)+([a-zA-Z]{2,})';
+            var encoded = '%[0-9a-fA-F]{2}';
+            var characters = 'a-zA-Z0-9$\\-_.+!*\'(),;:@&=';
+            var segment = '([' + characters + ']|' + encoded + ')*';
+
+            // Build Regular Expression
+            var regex_str = '^';
+
+            if (this.get('options.domainOnly') === true) {
+                regex_str += hostname;
+            } else {
+                regex_str += '(' + this.get('options.protocols').join('|') + '):\\/\\/'; // Protocol
+
+                // Username and password
+                if (this.get('options.allowUserPass') === true) {
+                    regex_str += '(([a-zA-Z0-9$\\-_.+!*\'(),;:&=]|' + encoded + ')+@)?'; // Username & passwords
+                }
+
+                // IP Addresses?
+                if (this.get('options.allowIp') === true) {
+                    regex_str += '(' + hostname + '|' + ipaddress + ')'; // Hostname OR IP
+                } else {
+                    regex_str += '(' + hostname + ')'; // Hostname only
+                }
+
+                // Ports
+                if (this.get('options.allowPort') === true) {
+                    regex_str += '(:[0-9]+)?'; // Port
+                }
+
+                regex_str += '(\\/';
+                regex_str += '(' + segment + '(\\/' + segment + ')*)?'; // Path
+                regex_str += '(\\?' + '([' + characters + '/?]|' + encoded + ')*)?'; // Query
+                regex_str += '(\\#' + '([' + characters + '/?]|' + encoded + ')*)?'; // Anchor
+                regex_str += ')?';
+            }
+
+            regex_str += '$';
+
+            // RegExp
+            this.regexp = new RegExp(regex_str);
+            this.regexp_ip = new RegExp(ipaddress);
+        },
+        call: function() {
+            var url = this.model.get(this.property);
+
+            if (Ember.isEmpty(url)) {
+                if (this.get('options.allowBlank') !== true) {
+                    this.errors.pushObject(this.get('options.message'));
+                }
+            } else {
+                if (this.get('options.allowIp') !== true) {
+                    if (this.regexp_ip.test(url)) {
+                        this.errors.pushObject(this.get('options.message'));
+                        return;
+                    }
+                }
+
+                if (!this.regexp.test(url)) {
+                    this.errors.pushObject(this.get('options.message'));
+                }
+            }
+        }
+    });
+
+
+})();
+
+
+
+(function() {
+
+})();
+
+
+
+(function() {
+
+})();
+
 ;!function(e){if("object"==typeof exports)module.exports=e();else if("function"==typeof define&&define.amd)define(e);else{var f;"undefined"!=typeof window?f=window:"undefined"!=typeof global?f=global:"undefined"!=typeof self&&(f=self),(f.Em||(f.Em={})).Eu=e()}}(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);throw new Error("Cannot find module '"+o+"'")}var f=n[o]={exports:{}};t[o][0].call(f.exports,function(e){var n=t[o][1][e];return s(n?n:e)},f,f.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(_dereq_,module,exports){
 "use strict";
 var Namespace = window.Ember.Namespace;
@@ -72448,6 +73226,962 @@ exports["default"] = WithConfigMixin;
 },{}]},{},[3])
 (3)
 });
+;(function() {
+
+var _ref;
+
+Ember.Forms = Ember.Namespace.create();
+
+Ember.Forms.VERSION = '0.0.2';
+
+if ((_ref = Ember.libraries) != null) {
+  _ref.register('Ember Forms', Ember.Forms.VERSION);
+}
+
+
+})();
+
+(function() {
+
+Ember.Forms.utils = {};
+
+Ember.Forms.utils.createBoundSwitchAccessor = function(switchValue, myProperty, myDefault) {
+  if (myDefault == null) {
+    myDefault = 'default';
+  }
+  return (function(key, value) {
+    if (arguments.length === 2) {
+      this.set(myProperty, (value ? switchValue : myDefault));
+    }
+    return this.get(myProperty) === switchValue;
+  }).property(myProperty);
+};
+
+Ember.Forms.utils.namelize = function(string) {
+  return string.underscore().split('_').join(' ').capitalize();
+};
+
+
+})();
+
+(function() {
+
+
+/***
+Mixin that should be applied for all controls
+ */
+Ember.Forms.ControlMixin = Ember.Mixin.create({
+  classNameBindings: ['class'],
+  "class": 'form-control',
+  init: function() {
+    this._super();
+    return Ember.Binding.from("model." + (this.get('propertyName'))).to('value').connect(this);
+  },
+  hasValue: (function() {
+    return this.get('value') !== null;
+  }).property('value').readOnly()
+});
+
+
+})();
+
+(function() {
+
+
+/*
+A mixin that enriches a view that is attached to a model property.
+
+The property name by default is taken from the parentView unless explictly
+    defined in the `property` variable.
+
+This mixin also binds a property named `errors` to the model's `model.errors.@propertyName` array
+ */
+Em.Forms.HasPropertyMixin = Em.Mixin.create({
+  property: void 0,
+  propertyName: (function() {
+    if (this.get('property')) {
+      return this.get('property');
+    } else if (this.get('parentView.property')) {
+      return this.get('parentView.property');
+    } else {
+      return Em.assert(false, 'Property could not be found.');
+    }
+  }).property('parentView.property'),
+  init: function() {
+    this._super();
+    return Em.Binding.from('model.errors.' + this.get('propertyName')).to('errors').connect(this);
+  }
+});
+
+
+})();
+
+(function() {
+
+
+/*
+A mixin that enriches a view that is attached to a model property that has validation
+    support.
+
+This mixin binds a property named `errors` to the model's `model.errors.@propertyName` array
+ */
+Em.Forms.HasPropertyValidationMixin = Em.Mixin.create({
+  init: function() {
+    this._super();
+    Em.assert(!Em.isNone(this.get('propertyName')), 'propertyName is required.');
+    return Em.Binding.from('model.errors.' + this.get('propertyName')).to('errors').connect(this);
+  },
+  status: (function() {
+    if (this.get('errors.length')) {
+      return 'error';
+    } else {
+      return 'success';
+    }
+  }).property('errors.length')
+});
+
+
+})();
+
+(function() {
+
+
+/*
+Find the form of the view that merges this mixin
+ */
+Ember.Forms.InFormMixin = Em.Mixin.create({
+  form: (function() {
+    var parentView;
+    parentView = this.get('parentView');
+    while (parentView) {
+      if (parentView.get('tagName') === 'form') {
+        return parentView;
+      }
+      parentView = parentView.get('parentView');
+    }
+    return Ember.assert(false, 'Cannot find form');
+  }).property('parentView'),
+  model: (function() {
+    return this.get('form.model');
+  }).property('form')
+});
+
+
+})();
+
+(function() {
+
+Ember.TEMPLATES["components/form-control-help"] = Ember.Handlebars.template(function anonymous(Handlebars,depth0,helpers,partials,data) {
+this.compilerInfo = [4,'>= 1.0.0'];
+helpers = this.merge(helpers, Ember.Handlebars.helpers); data = data || {};
+  var stack1;
+
+
+  stack1 = helpers._triageMustache.call(depth0, "helpText", {hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  else { data.buffer.push(''); }
+  
+});
+
+Ember.TEMPLATES["components/form-group"] = Ember.Handlebars.template(function anonymous(Handlebars,depth0,helpers,partials,data) {
+this.compilerInfo = [4,'>= 1.0.0'];
+helpers = this.merge(helpers, Ember.Handlebars.helpers); data = data || {};
+  var stack1, escapeExpression=this.escapeExpression, helperMissing=helpers.helperMissing, self=this;
+
+function program1(depth0,data) {
+  
+  var buffer = '', helper, options;
+  data.buffer.push("\n    <div ");
+  data.buffer.push(escapeExpression(helpers['bind-attr'].call(depth0, {hash:{
+    'class': ("wrapperClass")
+  },hashTypes:{'class': "ID"},hashContexts:{'class': depth0},contexts:[],types:[],data:data})));
+  data.buffer.push(">\n        ");
+  data.buffer.push(escapeExpression((helper = helpers.partial || (depth0 && depth0.partial),options={hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["STRING"],data:data},helper ? helper.call(depth0, "components/formgroup/form-group", options) : helperMissing.call(depth0, "partial", "components/formgroup/form-group", options))));
+  data.buffer.push("\n    </div>\n");
+  return buffer;
+  }
+
+function program3(depth0,data) {
+  
+  var buffer = '', helper, options;
+  data.buffer.push("\n    ");
+  data.buffer.push(escapeExpression((helper = helpers.partial || (depth0 && depth0.partial),options={hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["STRING"],data:data},helper ? helper.call(depth0, "components/formgroup/form-group", options) : helperMissing.call(depth0, "partial", "components/formgroup/form-group", options))));
+  data.buffer.push("\n");
+  return buffer;
+  }
+
+  stack1 = helpers['if'].call(depth0, "wrapperClass", {hash:{},hashTypes:{},hashContexts:{},inverse:self.program(3, program3, data),fn:self.program(1, program1, data),contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  else { data.buffer.push(''); }
+  
+});
+
+Ember.TEMPLATES["components/form-label"] = Ember.Handlebars.template(function anonymous(Handlebars,depth0,helpers,partials,data) {
+this.compilerInfo = [4,'>= 1.0.0'];
+helpers = this.merge(helpers, Ember.Handlebars.helpers); data = data || {};
+  var buffer = '', stack1;
+
+
+  stack1 = helpers._triageMustache.call(depth0, "yield", {hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("\n");
+  stack1 = helpers._triageMustache.call(depth0, "text", {hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  return buffer;
+  
+});
+
+Ember.TEMPLATES["components/form-submit-button"] = Ember.Handlebars.template(function anonymous(Handlebars,depth0,helpers,partials,data) {
+this.compilerInfo = [4,'>= 1.0.0'];
+helpers = this.merge(helpers, Ember.Handlebars.helpers); data = data || {};
+  var buffer = '', stack1, escapeExpression=this.escapeExpression, self=this;
+
+function program1(depth0,data) {
+  
+  var buffer = '', stack1;
+  data.buffer.push("\n    <div ");
+  data.buffer.push(escapeExpression(helpers['bind-attr'].call(depth0, {hash:{
+    'class': ("horiClass")
+  },hashTypes:{'class': "ID"},hashContexts:{'class': depth0},contexts:[],types:[],data:data})));
+  data.buffer.push(">\n        <button ");
+  data.buffer.push(escapeExpression(helpers['bind-attr'].call(depth0, {hash:{
+    'class': ("classes")
+  },hashTypes:{'class': "ID"},hashContexts:{'class': depth0},contexts:[],types:[],data:data})));
+  data.buffer.push(" ");
+  data.buffer.push(escapeExpression(helpers['bind-attr'].call(depth0, {hash:{
+    'disabled': ("disabled")
+  },hashTypes:{'disabled': "ID"},hashContexts:{'disabled': depth0},contexts:[],types:[],data:data})));
+  data.buffer.push(">");
+  stack1 = helpers._triageMustache.call(depth0, "text", {hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("</button>\n    </div>\n");
+  return buffer;
+  }
+
+function program3(depth0,data) {
+  
+  var buffer = '', stack1;
+  data.buffer.push("\n    <button ");
+  data.buffer.push(escapeExpression(helpers['bind-attr'].call(depth0, {hash:{
+    'class': ("classes")
+  },hashTypes:{'class': "ID"},hashContexts:{'class': depth0},contexts:[],types:[],data:data})));
+  data.buffer.push(" ");
+  data.buffer.push(escapeExpression(helpers['bind-attr'].call(depth0, {hash:{
+    'disabled': ("disabled")
+  },hashTypes:{'disabled': "ID"},hashContexts:{'disabled': depth0},contexts:[],types:[],data:data})));
+  data.buffer.push(">");
+  stack1 = helpers._triageMustache.call(depth0, "text", {hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("</button>\n");
+  return buffer;
+  }
+
+  stack1 = helpers['if'].call(depth0, "form.isHorizontal", {hash:{},hashTypes:{},hashContexts:{},inverse:self.program(3, program3, data),fn:self.program(1, program1, data),contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("\n");
+  return buffer;
+  
+});
+
+Ember.TEMPLATES["components/form"] = Ember.Handlebars.template(function anonymous(Handlebars,depth0,helpers,partials,data) {
+this.compilerInfo = [4,'>= 1.0.0'];
+helpers = this.merge(helpers, Ember.Handlebars.helpers); data = data || {};
+  var buffer = '', stack1, self=this;
+
+function program1(depth0,data) {
+  
+  var buffer = '', stack1;
+  data.buffer.push("\n    ");
+  stack1 = helpers._triageMustache.call(depth0, "em-form-submit", {hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("\n");
+  return buffer;
+  }
+
+  stack1 = helpers._triageMustache.call(depth0, "yield", {hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("\n");
+  stack1 = helpers['if'].call(depth0, "submit_button", {hash:{},hashTypes:{},hashContexts:{},inverse:self.noop,fn:self.program(1, program1, data),contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  return buffer;
+  
+});
+
+Ember.TEMPLATES["components/formgroup/control-within-label"] = Ember.Handlebars.template(function anonymous(Handlebars,depth0,helpers,partials,data) {
+this.compilerInfo = [4,'>= 1.0.0'];
+helpers = this.merge(helpers, Ember.Handlebars.helpers); data = data || {};
+  var stack1, helper, options, helperMissing=helpers.helperMissing, escapeExpression=this.escapeExpression, self=this;
+
+function program1(depth0,data) {
+  
+  var buffer = '', helper, options;
+  data.buffer.push("\n    ");
+  data.buffer.push(escapeExpression((helper = helpers.partial || (depth0 && depth0.partial),options={hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["STRING"],data:data},helper ? helper.call(depth0, "components/formgroup/form-group-control", options) : helperMissing.call(depth0, "partial", "components/formgroup/form-group-control", options))));
+  data.buffer.push("\n");
+  return buffer;
+  }
+
+  stack1 = (helper = helpers['em-form-label'] || (depth0 && depth0['em-form-label']),options={hash:{
+    'text': ("label"),
+    'horiClass': (""),
+    'inlineClass': (""),
+    'viewName': ("labelViewName")
+  },hashTypes:{'text': "ID",'horiClass': "STRING",'inlineClass': "STRING",'viewName': "ID"},hashContexts:{'text': depth0,'horiClass': depth0,'inlineClass': depth0,'viewName': depth0},inverse:self.noop,fn:self.program(1, program1, data),contexts:[],types:[],data:data},helper ? helper.call(depth0, options) : helperMissing.call(depth0, "em-form-label", options));
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  else { data.buffer.push(''); }
+  
+});
+
+Ember.TEMPLATES["components/formgroup/form-group-control"] = Ember.Handlebars.template(function anonymous(Handlebars,depth0,helpers,partials,data) {
+this.compilerInfo = [4,'>= 1.0.0'];
+helpers = this.merge(helpers, Ember.Handlebars.helpers); data = data || {};
+  var buffer = '', stack1, escapeExpression=this.escapeExpression, self=this;
+
+function program1(depth0,data) {
+  
+  var buffer = '';
+  data.buffer.push("\n    <div ");
+  data.buffer.push(escapeExpression(helpers['bind-attr'].call(depth0, {hash:{
+    'class': ("controlWrapper")
+  },hashTypes:{'class': "ID"},hashContexts:{'class': depth0},contexts:[],types:[],data:data})));
+  data.buffer.push(">\n        ");
+  data.buffer.push(escapeExpression(helpers.view.call(depth0, "controlView", {hash:{
+    'viewName': ("controlViewName"),
+    'property': ("propertyName")
+  },hashTypes:{'viewName': "ID",'property': "ID"},hashContexts:{'viewName': depth0,'property': depth0},contexts:[depth0],types:["ID"],data:data})));
+  data.buffer.push("\n    </div>\n");
+  return buffer;
+  }
+
+function program3(depth0,data) {
+  
+  var buffer = '';
+  data.buffer.push("\n    ");
+  data.buffer.push(escapeExpression(helpers.view.call(depth0, "controlView", {hash:{
+    'viewName': ("controlViewName"),
+    'property': ("propertyName")
+  },hashTypes:{'viewName': "ID",'property': "ID"},hashContexts:{'viewName': depth0,'property': depth0},contexts:[depth0],types:["ID"],data:data})));
+  data.buffer.push("\n");
+  return buffer;
+  }
+
+  stack1 = helpers['if'].call(depth0, "controlWrapper", {hash:{},hashTypes:{},hashContexts:{},inverse:self.program(3, program3, data),fn:self.program(1, program1, data),contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("\n");
+  return buffer;
+  
+});
+
+Ember.TEMPLATES["components/formgroup/form-group"] = Ember.Handlebars.template(function anonymous(Handlebars,depth0,helpers,partials,data) {
+this.compilerInfo = [4,'>= 1.0.0'];
+helpers = this.merge(helpers, Ember.Handlebars.helpers); data = data || {};
+  var stack1, escapeExpression=this.escapeExpression, helperMissing=helpers.helperMissing, self=this;
+
+function program1(depth0,data) {
+  
+  var buffer = '', stack1;
+  data.buffer.push("\n    ");
+  stack1 = helpers['if'].call(depth0, "label", {hash:{},hashTypes:{},hashContexts:{},inverse:self.program(13, program13, data),fn:self.program(2, program2, data),contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("\n\n    ");
+  stack1 = helpers['if'].call(depth0, "v_icons", {hash:{},hashTypes:{},hashContexts:{},inverse:self.noop,fn:self.program(15, program15, data),contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("\n\n    \n    ");
+  stack1 = helpers.unless.call(depth0, "form.isInline", {hash:{},hashTypes:{},hashContexts:{},inverse:self.noop,fn:self.program(17, program17, data),contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("\n");
+  return buffer;
+  }
+function program2(depth0,data) {
+  
+  var buffer = '', stack1;
+  data.buffer.push("\n        ");
+  stack1 = helpers['if'].call(depth0, "yieldInLabel", {hash:{},hashTypes:{},hashContexts:{},inverse:self.program(8, program8, data),fn:self.program(3, program3, data),contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("\n    ");
+  return buffer;
+  }
+function program3(depth0,data) {
+  
+  var buffer = '', stack1;
+  data.buffer.push("\n            ");
+  stack1 = helpers['if'].call(depth0, "labelWrapperClass", {hash:{},hashTypes:{},hashContexts:{},inverse:self.program(6, program6, data),fn:self.program(4, program4, data),contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("\n        ");
+  return buffer;
+  }
+function program4(depth0,data) {
+  
+  var buffer = '', helper, options;
+  data.buffer.push("\n                <div ");
+  data.buffer.push(escapeExpression(helpers['bind-attr'].call(depth0, {hash:{
+    'class': ("labelWrapperClass")
+  },hashTypes:{'class': "ID"},hashContexts:{'class': depth0},contexts:[],types:[],data:data})));
+  data.buffer.push(">\n                    ");
+  data.buffer.push(escapeExpression((helper = helpers.partial || (depth0 && depth0.partial),options={hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["STRING"],data:data},helper ? helper.call(depth0, "components/formgroup/control-within-label", options) : helperMissing.call(depth0, "partial", "components/formgroup/control-within-label", options))));
+  data.buffer.push("\n                </div>\n            ");
+  return buffer;
+  }
+
+function program6(depth0,data) {
+  
+  var buffer = '', helper, options;
+  data.buffer.push("\n                ");
+  data.buffer.push(escapeExpression((helper = helpers.partial || (depth0 && depth0.partial),options={hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["STRING"],data:data},helper ? helper.call(depth0, "components/formgroup/control-within-label", options) : helperMissing.call(depth0, "partial", "components/formgroup/control-within-label", options))));
+  data.buffer.push("\n            ");
+  return buffer;
+  }
+
+function program8(depth0,data) {
+  
+  var buffer = '', stack1;
+  data.buffer.push("\n            ");
+  stack1 = helpers['if'].call(depth0, "labelWrapperClass", {hash:{},hashTypes:{},hashContexts:{},inverse:self.program(11, program11, data),fn:self.program(9, program9, data),contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("\n        ");
+  return buffer;
+  }
+function program9(depth0,data) {
+  
+  var buffer = '', helper, options;
+  data.buffer.push("\n                <div ");
+  data.buffer.push(escapeExpression(helpers['bind-attr'].call(depth0, {hash:{
+    'class': ("labelWrapperClass")
+  },hashTypes:{'class': "ID"},hashContexts:{'class': depth0},contexts:[],types:[],data:data})));
+  data.buffer.push(">\n                    ");
+  data.buffer.push(escapeExpression((helper = helpers['em-form-label'] || (depth0 && depth0['em-form-label']),options={hash:{
+    'text': ("label"),
+    'viewName': ("labelViewName")
+  },hashTypes:{'text': "ID",'viewName': "ID"},hashContexts:{'text': depth0,'viewName': depth0},contexts:[],types:[],data:data},helper ? helper.call(depth0, options) : helperMissing.call(depth0, "em-form-label", options))));
+  data.buffer.push("\n                    ");
+  data.buffer.push(escapeExpression((helper = helpers.partial || (depth0 && depth0.partial),options={hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["STRING"],data:data},helper ? helper.call(depth0, "components/formgroup/form-group-control", options) : helperMissing.call(depth0, "partial", "components/formgroup/form-group-control", options))));
+  data.buffer.push("\n                </div>\n            ");
+  return buffer;
+  }
+
+function program11(depth0,data) {
+  
+  var buffer = '', helper, options;
+  data.buffer.push("\n                ");
+  data.buffer.push(escapeExpression((helper = helpers['em-form-label'] || (depth0 && depth0['em-form-label']),options={hash:{
+    'text': ("label"),
+    'viewName': ("labelViewName")
+  },hashTypes:{'text': "ID",'viewName': "ID"},hashContexts:{'text': depth0,'viewName': depth0},contexts:[],types:[],data:data},helper ? helper.call(depth0, options) : helperMissing.call(depth0, "em-form-label", options))));
+  data.buffer.push("\n                ");
+  data.buffer.push(escapeExpression((helper = helpers.partial || (depth0 && depth0.partial),options={hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["STRING"],data:data},helper ? helper.call(depth0, "components/formgroup/form-group-control", options) : helperMissing.call(depth0, "partial", "components/formgroup/form-group-control", options))));
+  data.buffer.push("\n            ");
+  return buffer;
+  }
+
+function program13(depth0,data) {
+  
+  var buffer = '', helper, options;
+  data.buffer.push("\n        ");
+  data.buffer.push(escapeExpression((helper = helpers.partial || (depth0 && depth0.partial),options={hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["STRING"],data:data},helper ? helper.call(depth0, "components/formgroup/form-group-control", options) : helperMissing.call(depth0, "partial", "components/formgroup/form-group-control", options))));
+  data.buffer.push("\n    ");
+  return buffer;
+  }
+
+function program15(depth0,data) {
+  
+  var buffer = '';
+  data.buffer.push("\n        <span class=\"form-control-feedback\"><i ");
+  data.buffer.push(escapeExpression(helpers['bind-attr'].call(depth0, {hash:{
+    'class': ("v_icon")
+  },hashTypes:{'class': "ID"},hashContexts:{'class': depth0},contexts:[],types:[],data:data})));
+  data.buffer.push("></i></span>\n    ");
+  return buffer;
+  }
+
+function program17(depth0,data) {
+  
+  var buffer = '', stack1;
+  data.buffer.push("\n        ");
+  stack1 = helpers['if'].call(depth0, "canShowErrors", {hash:{},hashTypes:{},hashContexts:{},inverse:self.noop,fn:self.program(18, program18, data),contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("\n    ");
+  return buffer;
+  }
+function program18(depth0,data) {
+  
+  var buffer = '', helper, options;
+  data.buffer.push("\n            ");
+  data.buffer.push(escapeExpression((helper = helpers['em-form-control-help'] || (depth0 && depth0['em-form-control-help']),options={hash:{
+    'text': ("help"),
+    'viewName': ("helpViewName")
+  },hashTypes:{'text': "ID",'viewName': "ID"},hashContexts:{'text': depth0,'viewName': depth0},contexts:[],types:[],data:data},helper ? helper.call(depth0, options) : helperMissing.call(depth0, "em-form-control-help", options))));
+  data.buffer.push("\n        ");
+  return buffer;
+  }
+
+function program20(depth0,data) {
+  
+  var buffer = '', stack1;
+  data.buffer.push("\n    ");
+  stack1 = helpers._triageMustache.call(depth0, "yield", {hash:{},hashTypes:{},hashContexts:{},contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  data.buffer.push("\n");
+  return buffer;
+  }
+
+  stack1 = helpers.unless.call(depth0, "template", {hash:{},hashTypes:{},hashContexts:{},inverse:self.program(20, program20, data),fn:self.program(1, program1, data),contexts:[depth0],types:["ID"],data:data});
+  if(stack1 || stack1 === 0) { data.buffer.push(stack1); }
+  else { data.buffer.push(''); }
+  
+});
+
+})();
+
+(function() {
+
+
+/*
+Form View
+
+A component for rendering a form element.
+
+Syntax:
+{{em-form
+    //The layout of the form
+    form_layout="form|inline|horizontal"
+    //The model bound to the form if any
+    model="some_model_instance"
+    //The action to be invoked on the controller when a form is submitted.
+    action="some_action"
+    //if true a submit button will be rendered
+    submit_button=true|false
+    //if true validation icons will be rendered
+    v_icons=true|false
+}}
+ */
+Ember.Forms.FormComponent = Ember.Component.extend({
+  tagName: 'form',
+  layoutName: 'components/form',
+  classNameBindings: ['form_layout_class'],
+  attributeBindings: ['role'],
+  role: 'form',
+  form_layout_class: (function() {
+    switch (this.get('form_layout')) {
+      case 'horizontal':
+      case 'inline':
+        return "form-" + (this.get('form_layout'));
+      default:
+        return 'form';
+    }
+  }).property('form_layout'),
+  isDefaultLayout: Ember.Forms.utils.createBoundSwitchAccessor('form', 'form_layout', 'form'),
+  isInline: Ember.Forms.utils.createBoundSwitchAccessor('inline', 'form_layout', 'form'),
+  isHorizontal: Ember.Forms.utils.createBoundSwitchAccessor('horizontal', 'form_layout', 'form'),
+  action: 'submit',
+  model: void 0,
+  form_layout: 'form',
+  submit_button: true,
+  v_icons: true,
+
+  /*
+  Form submit
+  
+  Optionally execute model validations and perform a form submission.
+   */
+  submit: function(e) {
+    var promise;
+    if (e) {
+      e.preventDefault();
+    }
+    if (Ember.isNone(this.get('model.validate'))) {
+      return this.get('targetObject').send(this.get('action'));
+    } else {
+      promise = this.get('model').validate();
+      return promise.then((function(_this) {
+        return function() {
+          if (_this.get('model.isValid')) {
+            return _this.get('targetObject').send(_this.get('action'));
+          }
+        };
+      })(this));
+    }
+  }
+});
+
+Ember.Handlebars.helper('em-form', Ember.Forms.FormComponent);
+
+
+})();
+
+(function() {
+
+
+/*
+Form Control Help
+
+Renders a textual help of the control.
+
+Note: currently must be a direct descendant of a form-group or 'property' must be explicitly defined
+
+Syntax:
+{{em-form-control-help}}
+ */
+Em.Forms.FormControlHelpComponent = Em.Component.extend(Em.Forms.InFormMixin, Em.Forms.HasPropertyMixin, {
+  tagName: 'span',
+  classNames: ['help-block'],
+  classNameBindings: ['extraClass', 'horiClassCalc'],
+  layoutName: 'components/form-control-help',
+  text: void 0,
+  extraClass: void 0,
+  horiClass: 'col-sm-offset-2 col-sm-10',
+  horiClassCalc: (function() {
+    if (this.get('form.isHorizontal') && this.get('horiClass')) {
+      return this.get('horiClass');
+    }
+  }).property('form.isHorizontal'),
+  init: function() {
+    this._super();
+    return Em.Binding.from('model.errors.' + this.get('propertyName')).to('errors').connect(this);
+  },
+  helpText: (function() {
+    return this.get('errors.firstObject') || this.get('text');
+  }).property('text', 'errors.firstObject'),
+  hasHelp: (function() {
+    var _ref;
+    return ((_ref = this.get('helpText')) != null ? _ref.length : void 0) > 0;
+  }).property('helpText'),
+  hasError: (function() {
+    var _ref;
+    return (_ref = this.get('errors')) != null ? _ref.length : void 0;
+  }).property('errors.length')
+});
+
+Em.Handlebars.helper('em-form-control-help', Em.Forms.FormControlHelpComponent);
+
+
+})();
+
+(function() {
+
+
+/*
+Form Group
+
+Wraps labels, controls and help message for optimum spacing and validation styles.
+A wrapper for a single input with its assistances views such as label, help message.
+
+A form group can yield the control's view after or within a label, this is dependent on the control
+    required layout and is defined byt he yieldInLabel property
+
+
+Syntax:
+{{em-form-group
+    //The state of the form group
+    status="none|error|warning|success"
+    //If true the control view is yieled within the label
+    yieldInLabel=true|false
+    //If true validation icons will be rendered, by default inherited from the form
+    v_icons: true
+    //Label of the form group, default is a human friendly form of the property name
+    label="Some label"
+}}
+ */
+Em.Forms.FormGroupComponent = Em.Component.extend(Em.Forms.InFormMixin, Em.Forms.HasPropertyMixin, Em.Forms.HasPropertyValidationMixin, {
+  tagName: 'div',
+  layoutName: 'components/form-group',
+  "class": 'form-group',
+  classNameBindings: ['class', 'hasSuccess', 'hasWarning', 'hasError', 'v_icons:has-feedback'],
+  attributeBindings: ['disabled'],
+  hasSuccess: (function() {
+    return this.get('validations') && this.get('status') === 'success' && this.get('canShowErrors');
+  }).property('status', 'canShowErrors'),
+  hasWarning: (function() {
+    return this.get('validations') && this.get('status') === 'warning' && this.get('canShowErrors');
+  }).property('status', 'canShowErrors'),
+  hasError: (function() {
+    return this.get('validations') && this.get('status') === 'error' && this.get('canShowErrors');
+  }).property('status', 'canShowErrors'),
+  v_icons: Em.computed.alias('form.v_icons'),
+  v_success_icon: 'fa fa-check',
+  v_warn_icon: 'fa fa-exclamation-triangle',
+  v_error_icon: 'fa fa-times',
+  validations: true,
+  yieldInLabel: false,
+  v_icon: (function() {
+    if (!this.get('canShowErrors')) {
+      return;
+    }
+    switch (this.get('status')) {
+      case 'success':
+        return this.get('v_success_icon');
+      case 'warning':
+      case 'warn':
+        return this.get('v_warn_icon');
+      case 'error':
+        return this.get('v_error_icon');
+      default:
+        return null;
+    }
+  }).property('status', 'canShowErrors'),
+  init: function() {
+    return this._super();
+  },
+
+  /*
+  Observes the helpHasErrors of the help control and modify the 'status' property accordingly.
+   */
+
+  /*
+  Listen to the focus out of the form group and display the errors
+   */
+  focusOut: function() {
+    return this.set('canShowErrors', true);
+  }
+});
+
+Em.Handlebars.helper('em-form-group', Em.Forms.FormGroupComponent);
+
+
+})();
+
+(function() {
+
+
+/*
+Form Label
+
+When styled with bootstrap, when form is rendered horizontally, the label require the 'extraClass' property to
+    be set to a value such 'col-sm-2' to be aligned properly.
+
+Syntax:
+{{em-form-label
+    text="Some label"
+    extraClass="col-sm-2"
+}}
+
+Or can serve as a block helper for elements that needs to be wrapped within label element.
+{{#em-form-label text="Active?"}}
+    {{em-checkbox}}
+{{/em-form-label}}
+ */
+Ember.Forms.FormLabelComponent = Ember.Component.extend(Em.Forms.InFormMixin, {
+  tagName: 'label',
+  layoutName: 'components/form-label',
+  classNames: ['control-label'],
+  classNameBindings: ['extraClass', 'inlineClassCalc', 'horiClassCalc'],
+  attributeBindings: ['for'],
+  horiClass: 'col-sm-2',
+  horiClassCalc: (function() {
+    if (this.get('form.isHorizontal') && this.get('horiClass')) {
+      return this.get('horiClass');
+    }
+  }).property('form.isHorizontal'),
+  inlineClass: 'sr-only',
+  inlineClassCalc: (function() {
+    if (this.get('form.isInline') && this.get('inlineClass')) {
+      return this.get('inlineClass');
+    }
+  }).property('form.form_layout')
+});
+
+Ember.Handlebars.helper('em-form-label', Ember.Forms.FormLabelComponent);
+
+
+})();
+
+(function() {
+
+
+/*
+Form Input
+
+Syntax:
+{{em-input property="property name"}}
+ */
+Em.Forms.FormInputComponent = Em.Forms.FormGroupComponent.extend({
+  controlView: Em.TextField.extend(Em.Forms.ControlMixin, {
+    attributeBindings: ['placeholder', 'required', 'autofocus', 'disabled'],
+    placeholder: Em.computed.alias('parentView.placeholder'),
+    required: Em.computed.alias('parentView.required'),
+    autofocus: Em.computed.alias('parentView.autofocus'),
+    disabled: Em.computed.alias('parentView.disabled'),
+    type: Em.computed.alias('parentView.type'),
+    model: Em.computed.alias('parentView.model'),
+    propertyName: Em.computed.alias('parentView.propertyName')
+  }),
+  property: void 0,
+  label: void 0,
+  placeholder: void 0,
+  required: void 0,
+  autofocus: void 0,
+  disabled: void 0,
+  controlWrapper: (function() {
+    if (this.get('form.form_layout') === 'horizontal') {
+      return 'col-sm-10';
+    }
+    return null;
+  }).property('form.form_layout')
+});
+
+Ember.Handlebars.helper('em-input', function(options) {
+  return Ember.Handlebars.helpers.view.call(this, Ember.Forms.FormInputComponent, options);
+});
+
+
+})();
+
+(function() {
+
+
+/*
+Form Input
+
+Syntax:
+{{em-text property="property name" rows=4}}
+ */
+Em.Forms.FormTextComponent = Em.Forms.FormGroupComponent.extend({
+  controlView: Em.TextArea.extend(Em.Forms.ControlMixin, {
+    attributeBindings: ['placeholder'],
+    placeholder: Em.computed.alias('parentView.placeholder'),
+    model: Em.computed.alias('parentView.model'),
+    propertyName: Em.computed.alias('parentView.propertyName'),
+    rows: Em.computed.alias('parentView.rows')
+  }),
+  property: void 0,
+  label: void 0,
+  placeholder: void 0,
+  rows: 4,
+  controlWrapper: (function() {
+    if (this.get('form.form_layout') === 'horizontal') {
+      return 'col-sm-10';
+    }
+    return null;
+  }).property('form.form_layout')
+});
+
+Ember.Handlebars.helper('em-text', function(options) {
+  return Ember.Handlebars.helpers.view.call(this, Ember.Forms.FormTextComponent, options);
+});
+
+
+})();
+
+(function() {
+
+
+/*
+Form Input
+
+Syntax:
+{{em-checkbox property="property name"}}
+ */
+Em.Forms.FormCheckboxComponent = Em.Forms.FormGroupComponent.extend({
+  v_icons: false,
+  validations: false,
+  yieldInLabel: true,
+  controlView: Em.Checkbox.extend(Em.Forms.ControlMixin, {
+    "class": false,
+    model: Em.computed.alias('parentView.parentView.model'),
+    propertyName: Em.computed.alias('parentView.parentView.propertyName'),
+    init: function() {
+      this._super();
+      return Ember.Binding.from("model." + (this.get('propertyName'))).to('checked').connect(this);
+    }
+  }),
+  wrapperClass: (function() {
+    if (this.get('form.form_layout') === 'horizontal') {
+      return 'col-sm-offset-2 col-sm-10';
+    }
+  }).property('form.form_layout'),
+  labelWrapperClass: (function() {
+    if (this.get('form.form_layout') === 'horizontal') {
+      return 'checkbox';
+    }
+    return null;
+  }).property('form.form_layout'),
+  "class": (function() {
+    if (this.get('form.form_layout') !== 'horizontal') {
+      return 'checkbox';
+    }
+    return 'form-group';
+  }).property('form.form_layout')
+});
+
+Ember.Handlebars.helper('em-checkbox', function(options) {
+  return Ember.Handlebars.helpers.view.call(this, Ember.Forms.FormCheckboxComponent, options);
+});
+
+
+})();
+
+(function() {
+
+
+/*
+Form Select
+
+Syntax:
+{{em-select property="property name"
+    content=array_of_options
+    optionValuePath=keyForValue
+    optionLabelPath=keyForLabel
+    prompt="Optional default prompt"}}
+ */
+Em.Forms.FormSelectComponent = Em.Forms.FormGroupComponent.extend({
+  v_icons: false,
+  controlView: Em.Select.extend(Em.Forms.ControlMixin, {
+    model: Em.computed.alias('parentView.model'),
+    propertyName: Em.computed.alias('parentView.propertyName'),
+    content: Em.computed.alias('parentView.content'),
+    optionValuePath: Em.computed.alias('parentView.optionValuePath'),
+    optionLabelPath: Em.computed.alias('parentView.optionLabelPath'),
+    prompt: Em.computed.alias('parentView.prompt')
+  }),
+  property: void 0,
+  content: void 0,
+  optionValuePath: void 0,
+  optionLabelPath: void 0,
+  prompt: void 0,
+  controlWrapper: (function() {
+    if (this.get('form.form_layout') === 'horizontal') {
+      return 'col-sm-10';
+    }
+    return null;
+  }).property('form.form_layout')
+});
+
+Ember.Handlebars.helper('em-select', function(options) {
+  return Ember.Handlebars.helpers.view.call(this, Ember.Forms.FormSelectComponent, options);
+});
+
+
+})();
+
+(function() {
+
+
+/*
+Form Submit Button
+
+Syntax:
+{{em-form-submit text="Submit"}}
+ */
+Ember.Forms.FormSubmitComponent = Ember.Component.extend(Ember.Forms.InFormMixin, {
+  classes: 'btn btn-default',
+  layoutName: 'components/form-submit-button',
+  classNames: ['form-group'],
+  text: 'Submit',
+  type: 'submit',
+  attributeBindings: ['disabled'],
+  horiClass: 'col-sm-offset-2 col-sm-10',
+  disabled: (function() {
+    if (!Ember.isNone(this.get('model.isValid'))) {
+      return !this.get('model.isValid');
+    } else {
+      return false;
+    }
+  }).property('model.isValid')
+});
+
+Ember.Handlebars.helper('em-form-submit', Ember.Forms.FormSubmitComponent);
+
+
+})();
 ;!function(e){if("object"==typeof exports)module.exports=e();else if("function"==typeof define&&define.amd)define(e);else{var f;"undefined"!=typeof window?f=window:"undefined"!=typeof global?f=global:"undefined"!=typeof self&&(f=self),(f.Em||(f.Em={})).EC=e()}}(function(){var define,module,exports;return (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);throw new Error("Cannot find module '"+o+"'")}var f=n[o]={exports:{}};t[o][0].call(f.exports,function(e){var n=t[o][1][e];return s(n?n:e)},f,f.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(_dereq_,module,exports){
 "use strict";
 exports["default"] = Ember.Handlebars.compile("<!--panel-heading-->\n<!--panel-title-->\n<!--accordion-toggle-->\n\n<!--panel-collapse collapse-->\n<!--panel-body-->\n<div {{bind-attr class=panelHeaderClasses}}>\n    <h4 {{bind-attr class=panelTitleClasses}} style=\"cursor: pointer;\">\n        <a {{bind-attr class=panelTogglerClasses}}>\n            {{view.title}}\n        </a>\n    </h4>\n</div>\n<div {{bind-attr class=panelBodyContainerClasses}}>\n    <div {{bind-attr class=panelBodyClasses}}>{{yield}}</div>\n</div>");
@@ -72584,14 +74318,12 @@ AccordionItem = Component.extend(WithConfigMixin, {
   hide: function() {
     var $accordionBody;
     $accordionBody = this.$('.panel-collapse');
-    $accordionBody.removeClass('in');
-    return $accordionBody.height($accordionBody.height())[0].offsetHeight;
+    return $accordionBody.removeClass('in');
   },
   show: function() {
     var $accordionBody;
     $accordionBody = this.$('.panel-collapse');
-    $accordionBody.addClass('in');
-    return $accordionBody.height($accordionBody[0]['scrollHeight']);
+    return $accordionBody.addClass('in');
   }
 });
 
@@ -72663,6 +74395,157 @@ Accordion = Component.extend(WithConfigMixin, {
 
 exports["default"] = Accordion;;
 },{}],4:[function(_dereq_,module,exports){
+"use strict";
+exports["default"] = Ember.Handlebars.compile("{{#if icon-classes}}\n    <i {{bind-attr class=\'icon-classes\'}}></i>\n{{/if}}\n{{label}}");
+},{}],5:[function(_dereq_,module,exports){
+"use strict";
+var Component = window.Ember.Component;
+var ArrayProxy = window.Ember.ArrayProxy;
+var computed = window.Ember.computed;
+
+var Button, WithConfigMixin;
+
+WithConfigMixin = Em.Eu.WithConfigMixin;
+
+
+/**
+ * Button component
+ * 
+ * Styled button with async support.
+ *
+ * @class Button
+ */
+
+Button = Component.extend(WithConfigMixin, {
+
+  /**
+   * The tag name the component is rendered as.
+   * This theoretically can be a div or anything else.
+   * @property tagName
+   * @private
+   */
+  tagName: 'button',
+
+  /**
+   * The template of the component
+   * @property layoutName
+   * @private
+   */
+  layoutName: 'em-button',
+
+  /**
+   * Bind the specified properties as DOM attributes.
+   * @property attributeBindings
+   * @private
+   */
+  attributeBindings: ['disabled', 'state'],
+
+  /**
+   * Bind the specified properties as the classes of the DOM element.
+   */
+  classNameBindings: ['class'],
+
+  /**
+   * True if the button is disabled and cannot be clicked.
+   * @property disabled
+   * @public
+   */
+  disabled: computed.equal('state', 'executing'),
+
+  /**
+   * The state of the button, can be one of the following:
+   * default - The button is enabled and ready to be clicked.
+   * executing - The promise bound to the button was sent and the promise is still executing
+   * resolved - The promise was resolved properly.
+   * rejected - The promise bound to the button was finished as rejected.
+   *
+   * The state is also bound to the DOM as `state` property, this allows to easily change styles for every
+   * state by using `.em-button[state=resolved]` syntax.
+   *
+   * The label of the button will change to the value of the component properties that correspond to the 
+   * states mentioned above.
+   *
+   * @property state
+   * @private
+   */
+  state: 'default',
+
+  /**
+   * The action name to invoke on the controller when the button is clicked.
+   * @property on-click
+   * @public
+   */
+  'on-click': void 0,
+
+  /**
+   * If set, an icon tag will be added as apart of the button and the given value here will be set
+   * as the icon's `class` attribute.
+   * @property icon-classes
+   * @public
+   */
+  'icon-classes': (function() {
+    var propName;
+    propName = "icon-" + this.state;
+    return this.getWithDefault(propName, this.get('icon-default'));
+  }).property('state', 'icon-default', 'icon-executing', 'icon-resolved', 'icon-rejected'),
+
+  /*
+   * The label of the button, calculated according to the state of the button
+   * See the `state` property documentation for more info.
+   * @property label
+   * @private
+   */
+  label: (function() {
+    return this.getWithDefault(this.state, this.get('default'));
+  }).property('state', 'default', 'executing', 'resolved', 'rejected'),
+
+  /**
+   * Set by the `onClick` callback, if set, the promise will be observed and the button's state will be
+   * changed accordingly.
+   * @property promise
+   * @private
+   */
+  promise: void 0,
+
+  /**
+   * Triggered when the button is clicked
+   * Invoke the action name on the controller defined in the `action` property, default is `onClick`.
+   * The action on the controller recieves a property that should be set to the promise being invoked (if there is one)
+   * If a promise was set, the button will move to 'executing' state until the promise will be resolved
+   * @method onClick
+   * @private
+   */
+  onClick: (function() {
+    this.sendAction('on-click', (function(_this) {
+      return function(promise) {
+        _this.set('promise', promise);
+        return _this.set('state', 'executing');
+      };
+    })(this));
+    return false;
+  }).on('click'),
+
+  /*
+   * Observes the promise property 
+   * @property changeStateByPromise
+   * @private
+   */
+  changeStateByPromise: (function() {
+    return this.get('promise').then((function(_this) {
+      return function() {
+        return _this.set('state', 'resolved');
+      };
+    })(this), (function(_this) {
+      return function(err) {
+        _this.set('state', 'rejected');
+        return _this.set('error', err);
+      };
+    })(this));
+  }).observes('promise')
+});
+
+exports["default"] = Button;
+},{}],6:[function(_dereq_,module,exports){
 "use strict";
 var Mixin = window.Ember.Mixin;
 
@@ -72771,7 +74654,7 @@ AsItem = Mixin.create({
 });
 
 exports["default"] = AsItem;
-},{}],5:[function(_dereq_,module,exports){
+},{}],7:[function(_dereq_,module,exports){
 "use strict";
 var Component = window.Ember.Component;
 var computed = window.Ember.computed;
@@ -72808,7 +74691,7 @@ ListItem = Component.extend(WithConfigMixin, AsListMixin, {
 });
 
 exports["default"] = ListItem;;
-},{"./as-item":4}],6:[function(_dereq_,module,exports){
+},{"./as-item":6}],8:[function(_dereq_,module,exports){
 "use strict";
 var Component = window.Ember.Component;
 var ArrayProxy = window.Ember.ArrayProxy;
@@ -72830,6 +74713,7 @@ WithConfigMixin = Em.Eu.WithConfigMixin;
 
 List = Component.extend(WithConfigMixin, {
   tagName: 'ul',
+  attributeBindings: ['style'],
   classNameBindings: ['styleClasses'],
   styleClasses: (function() {
     var _ref;
@@ -72843,6 +74727,11 @@ List = Component.extend(WithConfigMixin, {
    * @type Item
    */
   selected: void 0,
+
+  /**
+   * True if this list supports selection
+   */
+  selection: true,
 
   /**
    * List can be bound to models, models can be a property or an object that the list is bound to.
@@ -72905,24 +74794,28 @@ List = Component.extend(WithConfigMixin, {
    */
   select: function(item) {
     var _ref;
-    if (!item || this.get('selected') === item) {
-      return;
+    if (!this.get('selection')) {
+      return item.sendAction('on-click', item);
+    } else {
+      if (!item || this.get('selected') === item) {
+        return;
+      }
+      Em.debug("Selecting tab: " + (item.get('index')));
+      if ((_ref = this.get('selected')) != null ? _ref.sendAction : void 0) {
+        this.get('selected').sendAction('on-deselect', this.get('selected'));
+      }
+      this.set('selected', item);
+      this.get('selected').sendAction('on-select', this.get('selected'));
+      this.set('selected-idx', item.get('index'));
+      return this.get('items').forEach((function(_this) {
+        return function(i) {
+          if (_this.get('selected') === i) {
+            return;
+          }
+          return i.sendAction('on-selection-change', i, _this.get('selected'));
+        };
+      })(this));
     }
-    Em.debug("Selecting tab: " + (item.get('index')));
-    if ((_ref = this.get('selected')) != null ? _ref.sendAction : void 0) {
-      this.get('selected').sendAction('on-deselect', this.get('selected'));
-    }
-    this.set('selected', item);
-    this.get('selected').sendAction('on-select', this.get('selected'));
-    this.set('selected-idx', item.get('index'));
-    return this.get('items').forEach((function(_this) {
-      return function(i) {
-        if (_this.get('selected') === i) {
-          return;
-        }
-        return i.sendAction('on-selection-change', i, _this.get('selected'));
-      };
-    })(this));
   },
   notifyModelsChange: (function() {
     return run.next(this, function() {
@@ -72943,7 +74836,7 @@ List = Component.extend(WithConfigMixin, {
 });
 
 exports["default"] = List;
-},{}],7:[function(_dereq_,module,exports){
+},{}],9:[function(_dereq_,module,exports){
 "use strict";
 var TabsComponent = _dereq_("./tabs/tabs")["default"] || _dereq_("./tabs/tabs");
 
@@ -72973,14 +74866,29 @@ var AccordionItemComponent = _dereq_("./accordion/accordion-item")["default"] ||
 
 var AccordionItemTmpl = _dereq_("./accordion/accordion-item-tmpl")["default"] || _dereq_("./accordion/accordion-item-tmpl");
 
+var TreeComponent = _dereq_("./tree/tree")["default"] || _dereq_("./tree/tree");
+var TreeTmpl = _dereq_("./tree/tree-tmpl")["default"] || _dereq_("./tree/tree-tmpl");
+var TreeStyle = _dereq_("./tree/tree-css")["default"] || _dereq_("./tree/tree-css");
 var TreeNode = _dereq_("./tree/node")["default"] || _dereq_("./tree/node");
 var TreeNodeComponent = _dereq_("./tree/tree-node")["default"] || _dereq_("./tree/tree-node");
 var TreeNodeTmpl = _dereq_("./tree/tree-node-tmpl")["default"] || _dereq_("./tree/tree-node-tmpl");
+var TreeNodeIconAction = _dereq_("./tree/tree-node-icon-action")["default"] || _dereq_("./tree/tree-node-icon-action");
 var TreeBranchComponent = _dereq_("./tree/tree-branch")["default"] || _dereq_("./tree/tree-branch");
 var TreeBranchTmpl = _dereq_("./tree/tree-branch-tmpl")["default"] || _dereq_("./tree/tree-branch-tmpl");
-var TreeBranchStyle = _dereq_("./tree/tree-branch-css")["default"] || _dereq_("./tree/tree-branch-css");
 var ListComponent = _dereq_("./list/list")["default"] || _dereq_("./list/list");
 var ListItemComponent = _dereq_("./list/list-item")["default"] || _dereq_("./list/list-item");
+var ModalComponent = _dereq_("./modal/modal")["default"] || _dereq_("./modal/modal");
+var ModalFormComponent = _dereq_("./modal/modal-form")["default"] || _dereq_("./modal/modal-form");
+var ModalEmFormComponent = _dereq_("./modal/modal-emform")["default"] || _dereq_("./modal/modal-emform");
+var ModalTitleComponent = _dereq_("./modal/modal-title")["default"] || _dereq_("./modal/modal-title");
+var ModalBodyComponent = _dereq_("./modal/modal-body")["default"] || _dereq_("./modal/modal-body");
+var ModalFooterComponent = _dereq_("./modal/modal-footer")["default"] || _dereq_("./modal/modal-footer");
+var ModalTogglerComponent = _dereq_("./modal/modal-toggler")["default"] || _dereq_("./modal/modal-toggler");
+var ModalTmpl = _dereq_("./modal/modal-tmpl")["default"] || _dereq_("./modal/modal-tmpl");
+var ModalConfirmComponent = _dereq_("./modal/modal-confirm")["default"] || _dereq_("./modal/modal-confirm");
+var ModalConfirmTmpl = _dereq_("./modal/modal-confirm-tmpl")["default"] || _dereq_("./modal/modal-confirm-tmpl");
+var ButtonComponent = _dereq_("./button/button")["default"] || _dereq_("./button/button");
+var ButtonTmplComponent = _dereq_("./button/button-tmpl")["default"] || _dereq_("./button/button-tmpl");
 var Application = window.Ember.Application;
 var Namespace = window.Ember.Namespace;
 
@@ -72999,6 +74907,7 @@ Application.initializer({
         tabListTag: ['ul']
       },
       tree: {
+        classes: ['em-tree-branch', 'em-tree', 'fa-ul'],
         branchClasses: ['em-tree-branch', 'fa-ul'],
         nodeClasses: ['em-tree-node'],
         nodeOpenClasses: [],
@@ -73040,6 +74949,12 @@ Application.initializer({
         panelTogglerClasses: ['accordion-toggle'],
         panelBodyContainerClasses: ['panel-collapse', 'collapse'],
         panelBodyClasses: ['panel-body']
+      },
+      modal: {
+        classes: ['modal', 'fade'],
+        bodyClasses: ['modal-body'],
+        titleClasses: ['modal-header'],
+        footerClasses: ['modal-footer']
       }
     });
     Config.addConfig('foundation', {
@@ -73065,13 +74980,28 @@ Application.initializer({
     c.register('component:em-accordion', AccordionComponent);
     c.register('component:em-accordion-item', AccordionItemComponent);
     c.register('template:em-accordion-item-tmpl', AccordionItemTmpl);
+    c.register('component:em-tree', TreeComponent);
+    c.register('template:em-tree', TreeTmpl);
     c.register('component:em-tree-node', TreeNodeComponent);
     c.register('template:em-tree-node', TreeNodeTmpl);
+    c.register('component:em-tree-node-icon-action', TreeNodeIconAction);
     c.register('component:em-tree-branch', TreeBranchComponent);
     c.register('template:em-tree-branch', TreeBranchTmpl);
-    c.register('template:components/em-tree-branch-css', TreeBranchStyle);
+    c.register('template:components/em-tree-css', TreeStyle);
     c.register('component:em-list', ListComponent);
-    return c.register('component:em-list-item', ListItemComponent);
+    c.register('component:em-list-item', ListItemComponent);
+    c.register('component:em-modal', ModalComponent);
+    c.register('component:em-modal-form', ModalFormComponent);
+    c.register('component:em-modal-emform', ModalEmFormComponent);
+    c.register('component:em-modal-title', ModalTitleComponent);
+    c.register('component:em-modal-body', ModalBodyComponent);
+    c.register('component:em-modal-footer', ModalFooterComponent);
+    c.register('component:em-modal-toggler', ModalTogglerComponent);
+    c.register('template:em-modal', ModalTmpl);
+    c.register('component:em-modal-confirm', ModalConfirmComponent);
+    c.register('template:em-modal-confirm', ModalConfirmTmpl);
+    c.register('component:em-button', ButtonComponent);
+    return c.register('template:em-button', ButtonTmplComponent);
   }
 });
 
@@ -73086,12 +75016,634 @@ exports.WysiwygActionComponent = WysiwygActionComponent;
 exports.WysiwygEditorComponent = WysiwygEditorComponent;
 exports.AccordionComponent = AccordionComponent;
 exports.AccordionItemComponent = AccordionItemComponent;
+exports.TreeComponent = TreeComponent;
 exports.TreeNodeComponent = TreeNodeComponent;
 exports.TreeBranchComponent = TreeBranchComponent;
 exports.TreeNode = TreeNode;
+exports.TreeNodeIconAction = TreeNodeIconAction;
 exports.ListComponent = ListComponent;
 exports.ListItemComponent = ListItemComponent;
-},{"./accordion/accordion":3,"./accordion/accordion-item":2,"./accordion/accordion-item-tmpl":1,"./list/list":6,"./list/list-item":5,"./tabs/tab":10,"./tabs/tab-list":8,"./tabs/tab-panel":9,"./tabs/tabs":12,"./tabs/tabs-css":11,"./tree/node":13,"./tree/tree-branch":16,"./tree/tree-branch-css":14,"./tree/tree-branch-tmpl":15,"./tree/tree-node":18,"./tree/tree-node-tmpl":17,"./wysiwyg/action":20,"./wysiwyg/action-group":19,"./wysiwyg/actiontmpl":21,"./wysiwyg/editor":22,"./wysiwyg/toolbar":23,"./wysiwyg/wysiwyg":24}],8:[function(_dereq_,module,exports){
+exports.ModalComponent = ModalComponent;
+exports.ModalTitleComponent = ModalTitleComponent;
+exports.ModalBodyComponent = ModalBodyComponent;
+exports.ModalFooterComponent = ModalFooterComponent;
+exports.ModalTogglerComponent = ModalTogglerComponent;
+exports.ModalConfirmComponent = ModalConfirmComponent;
+exports.ModalFormComponent = ModalFormComponent;
+exports.ModalEmFormComponent = ModalEmFormComponent;
+exports.ButtonComponent = ButtonComponent;
+},{"./accordion/accordion":3,"./accordion/accordion-item":2,"./accordion/accordion-item-tmpl":1,"./button/button":5,"./button/button-tmpl":4,"./list/list":8,"./list/list-item":7,"./modal/modal":19,"./modal/modal-body":10,"./modal/modal-confirm":12,"./modal/modal-confirm-tmpl":11,"./modal/modal-emform":13,"./modal/modal-footer":14,"./modal/modal-form":15,"./modal/modal-title":16,"./modal/modal-tmpl":17,"./modal/modal-toggler":18,"./tabs/tab":22,"./tabs/tab-list":20,"./tabs/tab-panel":21,"./tabs/tabs":24,"./tabs/tabs-css":23,"./tree/node":25,"./tree/tree":33,"./tree/tree-branch":27,"./tree/tree-branch-tmpl":26,"./tree/tree-css":28,"./tree/tree-node":31,"./tree/tree-node-icon-action":29,"./tree/tree-node-tmpl":30,"./tree/tree-tmpl":32,"./wysiwyg/action":35,"./wysiwyg/action-group":34,"./wysiwyg/actiontmpl":36,"./wysiwyg/editor":37,"./wysiwyg/toolbar":38,"./wysiwyg/wysiwyg":39}],10:[function(_dereq_,module,exports){
+"use strict";
+var Component = window.Ember.Component;
+var ArrayProxy = window.Ember.ArrayProxy;
+var run = window.Ember.run;
+
+var ModalBody, StyleBindingsMixin, WithConfigMixin;
+
+WithConfigMixin = Em.Eu.WithConfigMixin;
+
+StyleBindingsMixin = Em.Eu.StyleBindingsMixin;
+
+
+/**
+ * `{{em-modal-body}}` component.
+ *
+ * The body of the modal
+ *
+ * @class ModalBody
+ * @public
+ */
+
+ModalBody = Component.extend(WithConfigMixin, StyleBindingsMixin, {
+  classNameBindings: ['styleClasses'],
+
+  /**
+   * The CSS classes that will be attached to the DOM element of the modal
+   * Classes should be configured externally by using the `config` object.
+   *
+   * @property styleClasses
+   * @private
+   * @type String
+   */
+  styleClasses: (function() {
+    var _ref;
+    return (_ref = this.get('config.modal.bodyClasses')) != null ? _ref.join(" ") : void 0;
+  }).property()
+});
+
+exports["default"] = ModalBody;
+},{}],11:[function(_dereq_,module,exports){
+"use strict";
+exports["default"] = Ember.Handlebars.compile("{{#em-modal id=confirm-id configName=configName model-id=model-id open-if=open-if close-if=close-if}}\n    {{#em-modal-title}}\n        {{#em-modal-toggler class=\"close\"}}<span aria-hidden=\"true\">&times;</span><span class=\"sr-only\">Close</span>{{/em-modal-toggler}}\n        <h4 class=\"modal-title\">{{title}}</h4>\n    {{/em-modal-title}}\n    {{#em-modal-body}}\n        {{message}}\n    {{/em-modal-body}}\n    {{#em-modal-footer}}\n        <button type=\"button\" class=\"btn btn-primary\" {{action \"confirmPressed\"}}>Yes</button>\n        {{#em-modal-toggler class=\"btn btn-default\"}}No{{/em-modal-toggler}}\n    {{/em-modal-footer}}\n{{/em-modal}}");
+},{}],12:[function(_dereq_,module,exports){
+"use strict";
+var Component = window.Ember.Component;
+var ArrayProxy = window.Ember.ArrayProxy;
+var run = window.Ember.run;
+
+
+/**
+ * A confirmation modal with 'Yes' & 'No' buttons
+ * When 'no' is pressed the modal is just closed.
+ * When 'yes' is pressed an action bound to the action on the controller set in the `confirm` property is invoked, 
+ * giving the controller a chance to decide whether to close the modal or not.
+ *
+ * @class ModalConfirm
+ */
+var ModalConfirm;
+
+ModalConfirm = Component.extend({
+  layoutName: 'em-modal-confirm',
+
+  /**
+   * Bound to the action on the controller to be invoked when the 'yes' button is pressed.
+   * @property confirm
+   * @public
+   */
+  confirm: "confirm",
+
+  /**
+   * The default title of the modal if not set otherwise.
+   *
+   * @property title
+   * @public
+   */
+  title: 'Please confirm',
+
+  /**
+   * The default message of the modal if not set otherwise.
+   *
+   * @property message
+   * @public
+   */
+  message: 'Please press Yes to confirm the operation.',
+  actions: {
+
+    /**
+     * Invoked when the user clicks the "Yes" button, triggers an action on the controller.
+     * 
+     * @method confirmPressed
+     * @private
+     */
+    confirmPressed: function() {
+      return this.sendAction('confirm');
+    }
+  }
+});
+
+exports["default"] = ModalConfirm;
+},{}],13:[function(_dereq_,module,exports){
+"use strict";
+var Component = window.Ember.Component;
+var ArrayProxy = window.Ember.ArrayProxy;
+var run = window.Ember.run;
+
+var FormModal = _dereq_("./modal-form")["default"] || _dereq_("./modal-form");
+var EmModalForm;
+
+EmModalForm = FormModal.extend({
+  classNameBindings: ['form'],
+  attributeBindings: ['role'],
+  role: 'form',
+  model: void 0,
+  submit_button: false
+});
+
+exports["default"] = EmModalForm;
+},{"./modal-form":15}],14:[function(_dereq_,module,exports){
+"use strict";
+var Component = window.Ember.Component;
+var ArrayProxy = window.Ember.ArrayProxy;
+var run = window.Ember.run;
+
+var ModalFooter, StyleBindingsMixin, WithConfigMixin;
+
+WithConfigMixin = Em.Eu.WithConfigMixin;
+
+StyleBindingsMixin = Em.Eu.StyleBindingsMixin;
+
+
+/**
+ * `{{em-modal-footer}}` component.
+ *
+ * The footer of the modal
+ *
+ * @class ModalFooter
+ * @public
+ */
+
+ModalFooter = Component.extend(WithConfigMixin, StyleBindingsMixin, {
+  classNameBindings: ['styleClasses'],
+
+  /**
+   * The CSS classes that will be attached to the DOM element of the modal
+   * Classes should be configured externally by using the `config` object.
+   *
+   * @property styleClasses
+   * @private
+   * @type String
+   */
+  styleClasses: (function() {
+    var _ref;
+    return (_ref = this.get('config.modal.footerClasses')) != null ? _ref.join(" ") : void 0;
+  }).property()
+});
+
+exports["default"] = ModalFooter;
+},{}],15:[function(_dereq_,module,exports){
+"use strict";
+var ArrayProxy = window.Ember.ArrayProxy;
+var run = window.Ember.run;
+
+var Modal = _dereq_("./modal")["default"] || _dereq_("./modal");
+
+/**
+ * A flavour of a {{#crossLink "Modal}}Modal{{/crossLink}} that handles form submission right.
+ * @class ModalForm
+ */
+var ModalForm;
+
+ModalForm = Modal.extend({
+  tagName: 'form',
+  attributeBindings: ['in-async'],
+  'in-async': null,
+  'close-if-error': false,
+  error: null,
+
+  /**
+   * Handle form submit event.
+   * Submit the form, if the event returns a promise, then wait for the promise to be fulfilled first before
+   * closing the modal, if the promise returned an error, then the `error` property will be set with the given error object of the
+   * promise, when error occurs, the modal will only get closed if the `close-if-error` property isn't set to false
+   *
+   * @method submitForm
+   * @private
+   */
+  submitForm: (function(e) {
+    e.preventDefault();
+    this.sendAction('on-submit', this, e);
+    if (e.promise && "function" === typeof e.promise.then) {
+      this.set('in-async', 'true');
+      return e.promise.then((function(_this) {
+        return function(r) {
+          _this.set('in-async', null);
+          return _this.close();
+        };
+      })(this), (function(_this) {
+        return function(err) {
+          _this.set('in-async', null);
+          _this.set('error', err);
+          if (_this.get('close-if-error')) {
+            return _this.close();
+          }
+        };
+      })(this));
+    } else {
+      return this.close();
+    }
+  }).on('submit'),
+  close: function() {
+    this.set('error', null);
+    return this._super.apply(this, arguments);
+  }
+});
+
+exports["default"] = ModalForm;
+},{"./modal":19}],16:[function(_dereq_,module,exports){
+"use strict";
+var Component = window.Ember.Component;
+var ArrayProxy = window.Ember.ArrayProxy;
+var run = window.Ember.run;
+
+var ModalTitle, StyleBindingsMixin, WithConfigMixin;
+
+WithConfigMixin = Em.Eu.WithConfigMixin;
+
+StyleBindingsMixin = Em.Eu.StyleBindingsMixin;
+
+
+/**
+ * `{{em-modal-title}}` component.
+ *
+ * The title of the modal
+ *
+ * @class ModalTitle
+ * @public
+ */
+
+ModalTitle = Component.extend(WithConfigMixin, StyleBindingsMixin, {
+  classNameBindings: ['styleClasses'],
+
+  /**
+   * The CSS classes that will be attached to the DOM element of the modal
+   * Classes should be configured externally by using the `config` object.
+   *
+   * @property styleClasses
+   * @private
+   * @type String
+   */
+  styleClasses: (function() {
+    var _ref;
+    return (_ref = this.get('config.modal.titleClasses')) != null ? _ref.join(" ") : void 0;
+  }).property(),
+
+  /**
+   * Register the title within the modal
+   * Note: Expects this title to be the direct descendant of the modal component
+   *
+   * @method registerInModal
+   * @private
+   */
+  registerInModal: function() {
+    return (this.get('parentView').setTitle(this)).on('init');
+  }
+});
+
+exports["default"] = ModalTitle;
+},{}],17:[function(_dereq_,module,exports){
+"use strict";
+exports["default"] = Ember.Handlebars.compile("{{#if is-open}}\n    <div class=\"modal-dialog\">\n        <div class=\"modal-content\">\n            {{yield}}\n        </div>\n    </div>\n{{/if}}");
+},{}],18:[function(_dereq_,module,exports){
+"use strict";
+var Component = window.Ember.Component;
+var ArrayProxy = window.Ember.ArrayProxy;
+var run = window.Ember.run;
+var View = window.Ember.View;
+var Modal = _dereq_("./modal")["default"] || _dereq_("./modal");
+var ModalToggler, StyleBindingsMixin, WithConfigMixin;
+
+WithConfigMixin = Em.Eu.WithConfigMixin;
+
+StyleBindingsMixin = Em.Eu.StyleBindingsMixin;
+
+
+/**
+ * `{{em-modal-toggler}}` component.
+ *
+ * A component to toggle the visibility of a modal
+ *
+ * @class ModalToggler
+ * @event on-toggle triggered when the toggler is clicked before changing the visibility of the modal
+ *   @param toggler Toggler - This instance of the toggler
+ * @public
+ */
+
+ModalToggler = Component.extend(WithConfigMixin, StyleBindingsMixin, {
+  tagName: 'button',
+  classNameBindings: ['styleClasses'],
+
+  /**
+   * The CSS classes that will be attached to the DOM element of the modal
+   * Classes should be configured externally by using the `config` object.
+   *
+   * @property styleClasses
+   * @private
+   * @type String
+   */
+  styleClasses: (function() {
+    var _ref;
+    return (_ref = this.get('config.modal.togglerClasses')) != null ? _ref.join(" ") : void 0;
+  }).property(),
+
+  /**
+   * Toggle the visibility of the modal that this toggler controls.
+   *
+   * @method toggleVisibility
+   * @private
+   */
+  toggleVisibility: (function() {
+    this.sendAction('on-toggle', this);
+    return this.get('modal').toggleVisibility();
+  }).on('click'),
+
+  /**
+   * Find the modal view and set it as a `modal` property
+   * A toggler can live as a descendant (not neccessarily a direct one) of a modal or outside of the modal chain
+   * TODO: Assert modal existance
+   * @method modalAsProperty
+   */
+  modalAsProperty: (function() {
+    var modalAsAncestor;
+    modalAsAncestor = this.nearestOfType(Modal);
+    if (modalAsAncestor) {
+      return this.set('modal', modalAsAncestor);
+    } else {
+      return run.schedule('afterRender', this, function() {
+        return this.set('modal', View.views[this.get('modal-id')]);
+      });
+    }
+  }).on('willInsertElement')
+});
+
+exports["default"] = ModalToggler;
+},{"./modal":19}],19:[function(_dereq_,module,exports){
+"use strict";
+var Component = window.Ember.Component;
+var ArrayProxy = window.Ember.ArrayProxy;
+var run = window.Ember.run;
+
+var ModalComponent, StyleBindingsMixin, WithConfigMixin;
+
+WithConfigMixin = Em.Eu.WithConfigMixin;
+
+StyleBindingsMixin = Em.Eu.StyleBindingsMixin;
+
+
+/**
+ * `{{em-modal}}` component.
+ *
+ * Define a modal component that can be opened and closed, the modal visibility is controlled by the 
+ * {{#crossLink "ModalToggler"}}ModalToggler{{/crossLink}} component.
+ *
+ * ```handlebars
+ * {{#em-modal id="modal1"}}
+ *   {{#em-modal-title}}
+ *     {{#em-modal-toggler}}<span>&times;</span>{{/em-modal-toggler}}
+ *        <h4 class="modal-title">I'm a modal title</h4>
+ *    {{/em-modal-title}}
+ *    {{#em-modal-body}}
+ *        One fine body…
+ *    {{/em-modal-body}}
+ *    {{#em-modal-footer}}
+ *    {{#em-modal-toggler}}Close{{/em-modal-toggler}}
+ *    {{/em-modal-footer}}
+ * {{/em-modal}}
+ * {{#em-modal-toggler modal-id="modal1"}}Click me!{{/em-modal-toggler}}
+ * ```
+ *
+ * @class Modal
+ * @event will-open
+ * @event did-open
+ * @event will-close
+ * @public
+ */
+
+ModalComponent = Component.extend(WithConfigMixin, StyleBindingsMixin, {
+  layoutName: 'em-modal',
+
+  /**
+   * Properties bound as attributes the DOM element.
+   * see documentation per property.
+   * @property panels
+   * @private
+   * @type Array
+   */
+  attributeBindings: ['is-open', 'did-open', 'tabindex'],
+  classNameBindings: ['styleClasses', 'styleOpenningClasses'],
+  styleBindings: ['display'],
+
+  /**
+   * Define the tabindex DOM property.
+   * Required otherwise no keyDown events
+   * @property tabindex
+   */
+  tabindex: 0,
+
+  /**
+   * The CSS classes that will be attached to the DOM element of the modal
+   * Classes should be configured externally by using the `config` object.
+   * @property styleClasses
+   * @private
+   * @type String
+   */
+  styleClasses: (function() {
+    var _ref;
+    return (_ref = this.get('config.modal.classes')) != null ? _ref.join(" ") : void 0;
+  }).property('config.modal.classes'),
+
+  /**
+   * The class name that will be set when the modal gets opened
+   * @property styleOpenningClasses
+   * @public
+   */
+  styleOpenningClasses: (function() {
+    if (this.get('did-open')) {
+      return "in";
+    } else {
+      return "";
+    }
+  }).property('did-open'),
+
+  /*
+   * The CSS `display` property state.
+   * @property display
+   * @public
+   */
+  display: (function() {
+    if (this.get('did-open')) {
+      return 'block';
+    } else {
+      return 'none';
+    }
+  }).property('did-open'),
+
+  /**
+   * `show` property is bound to the DOM element as an attribute.
+   * This property is set to true immediately when the `toggleVisibility` method is invoked.
+   *
+   * This property can be used to start a transitioning effect, for example:
+   * ```css
+   *   em-modal[show] {
+   *     opacity: 0;
+   *     transition: opacity 100ms ease;
+   *   }
+   * ```
+   * 
+   * The transition effect should be ended when the modal is gets visible, see the property `shown` for more info.
+   * @property opened
+   * @see 'did-open'
+   * @private
+   */
+  'is-open': false,
+
+  /**
+   * A property bound to the DOM element that indicates that the modal has been made visible to the user. 
+   * (after the DOM element was set with `display: block;`)
+   *
+   * This proeprty can be used by CSS to end a transitioning effect by setting the CSS `opacity` to a higher number, for example:
+   *
+   * ```css
+   *   em-modal[shown] {
+   *     opacity: 1;
+   *   }
+  }
+   * ```
+   * @property did-open
+   * @private
+   */
+  'did-open': false,
+
+  /**
+   * Open modal and make it visible.
+   * @method open
+   * @public
+   */
+  open: function() {
+    this.trigger('show');
+    this.sendAction('show', this);
+    this.set('is-open', 'true');
+    return run.schedule('afterRender', this, function() {
+      this.set('did-open', 'true');
+      return this.trigger('shown');
+    });
+  },
+
+  /**
+   * Close the modal by making it invisible.
+   * @method close
+   * @public
+   */
+  close: function() {
+    this.trigger('hide');
+    this.sendAction('hide', this);
+    this.set('is-open', void 0);
+    return this.set('did-open', void 0);
+  },
+
+  /**
+   * Toggle the visibility of the modal based on its current state.
+   * @method toggleVisibility
+   * @public
+   */
+  toggleVisibility: function() {
+    if (this.get('is-open')) {
+      return this.close();
+    } else {
+      return this.open();
+    }
+  },
+
+  /**
+   * Set the title of the modal.
+   * @method setTitle
+   * @private
+   * @type ModalTitle
+   */
+  setTitle: function(title) {
+    return this.set('title', title);
+  },
+
+  /**
+   * Set the toggler of the modal
+   * @method setToggler
+   * @private
+   * @type ModalToggler
+   */
+  setToggler: function(toggler) {
+    return this.set('toggler', toggler);
+  },
+
+  /**
+   * Close the modal if the user clicks outside of the modal space.
+   * @method closeIfClickedOutside
+   * @private
+   */
+  closeIfClickedOutside: (function(e) {
+    if (e.target !== this.get('element')) {
+      return;
+    }
+    return this.close();
+  }).on('click'),
+
+  /**
+   * Handle keyboard events
+   * @method handleKeyboard
+   * @private
+   */
+  handleKeyboard: (function(e) {
+    switch (e.keyCode) {
+      case 27:
+        return this.close();
+    }
+  }).on('keyDown'),
+
+  /**
+   * Consumer can bind this property for a more fine grained control over when the modal is opened,
+   * This is good for situations where openning the modal via the `toggler` is not enough.
+   *
+   * @property open-if
+   * @public
+   */
+  'open-if': false,
+
+  /**
+   * observers the `open-if` property, if set to true, then open the modal.
+   * @method openIf
+   * @private
+   */
+  openIf: (function() {
+    if (!this.get('open-if')) {
+      return;
+    }
+    this.open();
+    return this.set('open-if', false);
+  }).observes('open-if'),
+
+  /**
+   * Consumer can bind this property for a more fine grained control over when the modal is closed,
+   * This is good for situations where closing the modal via the `toggler` is not enough.
+   *
+   * @property close-if
+   * @public
+   */
+  'close-if': false,
+
+  /**
+   * observers the `close-if` property, if set to true, then close the modal.
+   * @method closeIf
+   * @private
+   */
+  closeIf: (function() {
+    if (!this.get('close-if')) {
+      return;
+    }
+    this.close();
+    return this.set('close-if', false);
+  }).observes('close-if')
+});
+
+exports["default"] = ModalComponent;
+},{}],20:[function(_dereq_,module,exports){
 "use strict";
 var Component = window.Ember.Component;
 var ArrayProxy = window.Ember.ArrayProxy;
@@ -73208,7 +75760,7 @@ TabList = Component.extend(WithConfigMixin, {
 });
 
 exports["default"] = TabList;;
-},{}],9:[function(_dereq_,module,exports){
+},{}],21:[function(_dereq_,module,exports){
 "use strict";
 var Component = window.Ember.Component;
 var computed = window.Ember.computed;
@@ -73278,7 +75830,7 @@ TabPanel = Component.extend(WithConfigMixin, StyleBindingsMixin, {
 });
 
 exports["default"] = TabPanel;;
-},{}],10:[function(_dereq_,module,exports){
+},{}],22:[function(_dereq_,module,exports){
 "use strict";
 var Component = window.Ember.Component;
 var computed = window.Ember.computed;
@@ -73408,10 +75960,10 @@ Tab = Component.extend(WithConfigMixin, {
 });
 
 exports["default"] = Tab;;
-},{}],11:[function(_dereq_,module,exports){
+},{}],23:[function(_dereq_,module,exports){
 "use strict";
 exports["default"] = Ember.Handlebars.compile(".em-tabs, .em-tab-list, .em-tab-panel {\n  display: block;\n}\n\n.em-tab-list {\n  border-bottom: 1px solid #eee;\n}\n\n.em-tab {\n  display: inline-block;\n  padding: 6px 12px;\n  border: 1px solid transparent;\n  border-top-left-radius: 3px;\n  border-top-right-radius: 3px;\n  cursor: pointer;\n  margin-bottom: -1px;\n  position: relative;\n}\n\n.em-tab[active=true] {\n  border-color: #eee;\n  border-bottom-color: #fff;\n}");
-},{}],12:[function(_dereq_,module,exports){
+},{}],24:[function(_dereq_,module,exports){
 "use strict";
 var Component = window.Ember.Component;
 var ArrayProxy = window.Ember.ArrayProxy;
@@ -73548,10 +76100,10 @@ Tabs = Component.extend(WithConfigMixin, StyleBindingsMixin, {
 });
 
 exports["default"] = Tabs;;
-},{}],13:[function(_dereq_,module,exports){
+},{}],25:[function(_dereq_,module,exports){
 "use strict";
 var Ember = window.Ember["default"] || window.Ember;
-var Node;
+var Node, findChildrenOfNodeBy;
 
 Node = Ember.Object.extend({
   children: void 0,
@@ -73612,17 +76164,36 @@ Node = Ember.Object.extend({
   }).property('children.length'),
   isLevel1: (function() {
     return this.get('level') === 0;
-  }).property('children.length')
+  }).property('children.length'),
+  findChildBy: function(key, name) {
+    return findChildrenOfNodeBy(this, key, name);
+  }
 });
 
 exports["default"] = Node;
-},{}],14:[function(_dereq_,module,exports){
+
+findChildrenOfNodeBy = function(currChild, key, value) {
+  var c, _i, _len, _ref, _ref1;
+  if (currChild.get(key) === value) {
+    return currChild;
+  } else if (((_ref = currChild.get('children')) != null ? _ref.length : void 0) > 0) {
+    _ref1 = currChild.get('children');
+    for (_i = 0, _len = _ref1.length; _i < _len; _i++) {
+      c = _ref1[_i];
+      if (c.get(key) === value) {
+        return c;
+      } else {
+        findChildrenOfNodeBy(c, key, value);
+      }
+    }
+    return null;
+  }
+  return null;
+};
+},{}],26:[function(_dereq_,module,exports){
 "use strict";
-exports["default"] = Ember.Handlebars.compile(".em-tree-node {\n    cursor: pointer;\n    -webkit-touch-callout: none;\n    -webkit-user-select: none;\n    -khtml-user-select: none;\n    -moz-user-select: none;\n    -ms-user-select: none;\n    user-select: none;\n}\n\n.em-tree-node-active {\n    background: #e7e7e7;\n}");
-},{}],15:[function(_dereq_,module,exports){
-"use strict";
-exports["default"] = Ember.Handlebars.compile("{{#each nodes}}\n    {{em-tree-node node=this async=controller.async targetObject=controller.targetObject}}\n{{/each}}");
-},{}],16:[function(_dereq_,module,exports){
+exports["default"] = Ember.Handlebars.compile("{{#each children}}\n    {{em-tree-node model=this tree=view.tree async=controller.async targetObject=controller.targetObject}}\n{{/each}}");
+},{}],27:[function(_dereq_,module,exports){
 "use strict";
 var Component = window.Ember.Component;
 var ArrayProxy = window.Ember.ArrayProxy;
@@ -73642,20 +76213,15 @@ WithConfigMixin = Em.Eu.WithConfigMixin;
 TreeBranch = Component.extend(WithConfigMixin, {
 
   /**
-   * The node to render its children within this branch
-   * this property is expected to be defined by the user
+   * The model to render its children within this branch
+   * this property is set during component markup creation
    */
-  node: void 0,
-
-  /**
-   * The root node of the tree
-   */
-  rootNode: computed.alias('node.root'),
+  model: void 0,
 
   /**
    * A list of {{#crossLink "TreeNode"}}nodes{{/crossLink}} instances.
    */
-  nodes: computed.alias('node.children'),
+  children: computed.alias('model.children'),
 
   /**
    * True if node's children should be loaded asynchronously
@@ -73673,10 +76239,111 @@ TreeBranch = Component.extend(WithConfigMixin, {
 });
 
 exports["default"] = TreeBranch;;
-},{}],17:[function(_dereq_,module,exports){
+},{}],28:[function(_dereq_,module,exports){
 "use strict";
-exports["default"] = Ember.Handlebars.compile("{{#if hasIcon}}\n    <i {{action toggle}} {{bind-attr class=\"iconClass\"}}></i>\n{{else}}\n    <a {{action toggle}} class=\"text\">*</a>\n{{/if}}\n\n<span {{action select}} {{bind-attr class=\"nodeSelectedClasses\"}}>{{node.title}}</span>\n\n{{#if expanded}}\n    {{em-tree-branch node=node async=async targetObject=targetObject}}\n{{/if}}");
-},{}],18:[function(_dereq_,module,exports){
+exports["default"] = Ember.Handlebars.compile(".em-tree-node {\n    -webkit-touch-callout: none;\n    -webkit-user-select: none;\n    -khtml-user-select: none;\n    -moz-user-select: none;\n    -ms-user-select: none;\n    user-select: none;\n}\n\n.em-tree-node-active {\n    background: #e7e7e7;\n}\n\nli.em-tree-node > span {\n    cursor: pointer;\n}\n\nli.em-tree-node > span > span.actions {\n    visibility: hidden;\n}\n\nli.em-tree-node > span:hover > span.actions {\n    visibility: visible;\n}");
+},{}],29:[function(_dereq_,module,exports){
+"use strict";
+var Component = window.Ember.Component;
+var ArrayProxy = window.Ember.ArrayProxy;
+var computed = window.Ember.computed;
+
+var StyleBindingsMixin, TreeNodeIconAction, WithConfigMixin;
+
+WithConfigMixin = Em.Eu.WithConfigMixin;
+
+StyleBindingsMixin = Em.Eu.StyleBindingsMixin;
+
+
+/**
+ * An icon action of a tree node
+ * @class TreeNodeIconAction
+ */
+
+TreeNodeIconAction = Component.extend(WithConfigMixin, StyleBindingsMixin, {
+  attributeBindings: ['stickyMode:sticky'],
+
+  /**
+   * The tag name of the icon action,
+   * default is `<i>` but can be replaced with any tag.
+   * @property tagName
+   * @public
+   */
+  tagName: 'i',
+
+  /**
+   * Bind the visibility css property,
+   * this is required for the `sticky` property
+   * @property styleBindings
+   * @private
+   */
+  styleBindings: 'visibility',
+
+  /**
+   * Defines the css visibility according to the value of the `sticky` property
+   * @property visibility
+   * @private
+   */
+  visibility: (function() {
+    if (this.get('sticky')) {
+      return 'visible';
+    } else {
+      return void 0;
+    }
+  }).property('sticky'),
+
+  /**
+   * 'true' if the action icon should be sticky and not disappear when item is not hovered
+   * @property sticky
+   * @public
+   */
+  sticky: false,
+  stickyMode: (function() {
+    if (this.get('sticky')) {
+      return 'true';
+    } else {
+      return void 0;
+    }
+  }).property('sticky'),
+
+  /**
+   * Binds the specified css classes
+   * @property classNameBindings
+   * @private
+   */
+  classNameBindings: ['iconClasses'],
+
+  /**
+   * Set the given array of classes
+   * @property iconClasses
+   * @private
+   */
+  iconClasses: (function() {
+    var _ref;
+    return (_ref = this.get('meta.classes')) != null ? _ref.join(" ") : void 0;
+  }).property('meta.classes'),
+
+  /**
+   * An alias to the node model of this action
+   * @property node
+   * @public
+   */
+  node: computed.alias('parentView.node'),
+
+  /**
+   * Invoked when the action is clicked
+   * @method invokde
+   */
+  invoked: (function() {
+    return this.get('parentView.targetObject').send(this.get('meta.action'), this);
+  }).on('click')
+});
+
+exports["default"] = TreeNodeIconAction;
+},{}],30:[function(_dereq_,module,exports){
+"use strict";
+exports["default"] = Ember.Handlebars.compile("<span\n{{#if hasIcon}}\n    <i {{action toggle}} {{bind-attr class=\"iconClass\"}}></i>\n{{else}}\n    <a {{action toggle}} class=\"text\">*</a>\n{{/if}}\n</span>\n\n{{#if tree.in-multi-selection}}\n    <span class=\"em-tree-node-multiselection\">\n    {{#if multi-selected}}\n        <i {{action toggleSelection}} {{bind-attr class=\"tree.selected-icon\"}}></i>\n    {{else}}\n        <i {{action toggleSelection}} {{bind-attr class=\"tree.unselected-icon\"}}></i>\n    {{/if}}\n    </span>\n{{/if}}\n\n<span {{action select}} {{bind-attr class=\"nodeSelectedClasses :title\"}}>\n{{model.title}}\n{{#if tree.hovered-actions}}\n    <span class=\"actions\">\n    {{#each tree.hovered-actions}}\n        {{em-tree-node-icon-action meta=this model=controller.model}}</i>\n    {{/each}}\n    </span>\n{{/if}}\n</span>\n\n{{#if expanded}}\n    {{em-tree-branch model=model tree=tree async=async targetObject=targetObject}}\n{{/if}}");
+},{}],31:[function(_dereq_,module,exports){
 "use strict";
 var Component = window.Ember.Component;
 var ArrayProxy = window.Ember.ArrayProxy;
@@ -73694,40 +76361,41 @@ WithConfigMixin = Em.Eu.WithConfigMixin;
  */
 
 TreeNode = Component.extend(WithConfigMixin, {
+  attributeBindings: ['multi-selected'],
 
   /**
-   * The node model the tree node view is bound to
+   * The model the tree node view is bound to
    */
-  node: void 0,
+  model: void 0,
 
   /**
-   * true if the node of this view is a root node
+   * A reference to the tree view, this property is auto set during component instantiation
    */
-  isRootNode: computed.not('node.hasParent'),
+  tree: void 0,
 
   /**
-   * The root node model
+   * A reference to the root model
    */
-  root: computed.alias('node.root'),
+  rootModel: computed.alias('tree.model'),
 
   /**
    * True if the node is currently expanded, meaning its children are visible.
    */
-  expanded: false,
+  expanded: computed.alias('model.expanded'),
 
   /**
-   * True if this node is currently checked
-   * This is only relevant if the tree configured to support selection
+   * True if this node view is currently checked
+   * This is only relevant if the tree configured to support multi selection
    */
-  checked: false,
+  'multi-selected': false,
 
   /**
-   * True if should render an icon tag for this node
+   * True if should render an icon tag for this node view
    */
   hasIcon: true,
 
   /**
-   * True if nodes can be selected
+   * True if this node can be selected
    */
   selectable: true,
 
@@ -73735,8 +76403,8 @@ TreeNode = Component.extend(WithConfigMixin, {
    * True if this node is currently selected
    */
   isSelected: (function() {
-    return this.get('rootBranchView.selected') === this.get('node');
-  }).property('rootBranchView.selected'),
+    return this.get('tree.selected') === this.get('model');
+  }).property('tree.selected'),
 
   /**
    * True if this node is currently loading,
@@ -73751,31 +76419,11 @@ TreeNode = Component.extend(WithConfigMixin, {
   async: computed.alias('parentView.async'),
 
   /**
-   * Get the view of the root node
+   * true if this is a leaf node, meaning it has no children
    */
-  rootNodeView: (function() {
-    var view;
-    if (this.get('isRootNode')) {
-      return this;
-    }
-    view = this.get('parentView');
-    while (view) {
-      if (view.get('isRootNode')) {
-        return view;
-      }
-      view = view.get('parentView');
-    }
-  }).property('node'),
-
-  /**
-   * The root branch view
-   */
-  rootBranchView: (function() {
-    return this.get('rootNodeView.parentView');
-  }).property('rootNodeView'),
   leaf: (function() {
-    return this.get('node.children.length') === 0;
-  }).property('node.children.length'),
+    return !this.get('model.children') || this.get('model.children.length') === 0;
+  }).property('model.children.length'),
   tagName: 'li',
   layoutName: 'em-tree-node',
   classNameBindings: ['styleClasses', 'expandedClasses', 'leafClasses'],
@@ -73799,16 +76447,23 @@ TreeNode = Component.extend(WithConfigMixin, {
       return null;
     }
   }).property('isSelected'),
+  addMultiSelectionToTreeSelection: (function() {
+    if (this.get('multi-selected')) {
+      return this.get('tree.multi-selection').pushObject(this.get('model'));
+    } else {
+      return this.get('tree.multi-selection').removeObject(this.get('model'));
+    }
+  }).observes('multi-selected'),
   iconClass: (function() {
     var icons;
     icons = [];
     if (this.get('async')) {
       if (this.get('loading')) {
         icons = icons.concat(this.get('config.tree.nodeLoadingIconClasses'));
-      } else if (!this.get('node.children')) {
+      } else if (!this.get('model.children')) {
         icons = icons.concat(this.get('config.tree.nodeCloseIconClasses'));
       } else {
-        if (this.get('node.children.length') === 0) {
+        if (this.get('model.children.length') === 0) {
           icons = icons.concat(this.get('config.tree.nodeLeafIconClasses'));
         } else {
           icons = this.get('expanded') ? icons.concat(this.get('config.tree.nodeOpenIconClasses')) : icons.concat(this.get('config.tree.nodeCloseIconClasses'));
@@ -73831,9 +76486,9 @@ TreeNode = Component.extend(WithConfigMixin, {
   }).property('leaf'),
   actions: {
     toggle: function() {
-      if (this.get('async') && !this.get('expanded') && !this.get('node.children')) {
+      if (this.get('async') && !this.get('expanded') && !this.get('model.children')) {
         this.set('loading', true);
-        return this.sendAction('children', this.get('node'), this);
+        return this.sendAction('children', this.get('model'), this);
       } else {
         return this.toggleProperty('expanded');
       }
@@ -73842,7 +76497,14 @@ TreeNode = Component.extend(WithConfigMixin, {
       if (!this.get('selectable')) {
         return;
       }
-      return this.set('rootBranchView.selected', this.get('node'));
+      return this.set('tree.selected', this.get('model'));
+    },
+    toggleSelection: function() {
+      if (this.get('multi-selected')) {
+        return this.set('multi-selected', '');
+      } else {
+        return this.set('multi-selected', 'true');
+      }
     }
   },
   children: 'getChildren',
@@ -73854,7 +76516,95 @@ TreeNode = Component.extend(WithConfigMixin, {
 });
 
 exports["default"] = TreeNode;;
-},{}],19:[function(_dereq_,module,exports){
+},{}],32:[function(_dereq_,module,exports){
+"use strict";
+exports["default"] = Ember.Handlebars.compile("{{em-tree-node model=model tree=view async=async targetObject=targetObject}}");
+},{}],33:[function(_dereq_,module,exports){
+"use strict";
+var Component = window.Ember.Component;
+var ArrayProxy = window.Ember.ArrayProxy;
+var computed = window.Ember.computed;
+var A = window.Ember.A;
+var Tree, WithConfigMixin, expandTree;
+
+WithConfigMixin = Em.Eu.WithConfigMixin;
+
+
+/**
+ * A tree component
+ *
+ * @class Tree
+ */
+
+Tree = Component.extend(WithConfigMixin, {
+  tagName: 'ul',
+  layoutName: 'em-tree',
+  classNameBindings: ['styleClasses'],
+  styleClasses: (function() {
+    var _ref;
+    return (_ref = this.get('config.tree.classes')) != null ? _ref.join(" ") : void 0;
+  }).property(),
+
+  /**
+   * The model to render as the root node of the tree
+   * this property is expected to be defined by the user
+   */
+  model: void 0,
+
+  /**
+   * True if node's children should be loaded asynchronously
+   * This gives the opportunity to the user to invoke an async call to the server to retrieve data for the current
+   * branch being opened
+   */
+  async: false,
+  'in-multi-selection': false,
+  'multi-selection': A(),
+  'selected-icon': 'fa fa-check',
+  'unselected-icon': 'fa fa-times',
+  'expand-depth': null,
+  'auto-expand': false,
+  expandByDepth: (function() {
+    var depth;
+    if (this.get('expand-depth')) {
+      depth = parseInt(this.get('expand-depth'));
+      if (depth === 0) {
+        return;
+      }
+      return expandTree(this.get('model'), depth);
+    }
+  }).observes('expand-depth')
+});
+
+exports["default"] = Tree;
+
+expandTree = function(node, depth) {
+  var c, children, _i, _len, _results;
+  if (depth === 0) {
+    return;
+  }
+  node.set('expanded', true);
+  children = node.get('children');
+  if (children && "function" === typeof children.then) {
+    return children.then((function(_this) {
+      return function(loadedChildren) {
+        return loadedChildren.forEach(function(c) {
+          return expandTree(c, depth - 1);
+        });
+      };
+    })(this));
+  } else {
+    if (children.get('length') === 0 || depth === 0) {
+      return;
+    }
+    _results = [];
+    for (_i = 0, _len = children.length; _i < _len; _i++) {
+      c = children[_i];
+      _results.push(expandTree(c, depth - 1));
+    }
+    return _results;
+  }
+};
+},{}],34:[function(_dereq_,module,exports){
 "use strict";
 var Component = window.Ember.Component;
 var computed = window.Ember.computed;
@@ -73888,7 +76638,7 @@ ActionGroup = Component.extend(WithConfigMixin, {
 });
 
 exports["default"] = ActionGroup;;
-},{}],20:[function(_dereq_,module,exports){
+},{}],35:[function(_dereq_,module,exports){
 "use strict";
 var Component = window.Ember.Component;
 var computed = window.Ember.computed;
@@ -73935,10 +76685,10 @@ Action = Component.extend(WithConfigMixin, {
 });
 
 exports["default"] = Action;;
-},{}],21:[function(_dereq_,module,exports){
+},{}],36:[function(_dereq_,module,exports){
 "use strict";
 exports["default"] = Ember.Handlebars.compile("{{#if icon}}\n    <i {{bind-attr class=icon}}></i>\n{{/if}}\n");
-},{}],22:[function(_dereq_,module,exports){
+},{}],37:[function(_dereq_,module,exports){
 "use strict";
 var Component = window.Ember.Component;
 var computed = window.Ember.computed;
@@ -74009,7 +76759,7 @@ Editor = Component.extend(StyleBindingsMixin, {
 });
 
 exports["default"] = Editor;;
-},{}],23:[function(_dereq_,module,exports){
+},{}],38:[function(_dereq_,module,exports){
 "use strict";
 var Component = window.Ember.Component;
 var computed = window.Ember.computed;
@@ -74054,7 +76804,7 @@ Toolbar = Component.extend(WithConfigMixin, {
 });
 
 exports["default"] = Toolbar;;
-},{}],24:[function(_dereq_,module,exports){
+},{}],39:[function(_dereq_,module,exports){
 "use strict";
 var Component = window.Ember.Component;
 var ArrayProxy = window.Ember.ArrayProxy;
@@ -74118,8 +76868,8 @@ Wysiwyg = Component.extend(WithConfigMixin, {
 });
 
 exports["default"] = Wysiwyg;;
-},{}]},{},[7])
-(7)
+},{}]},{},[9])
+(9)
 });
 ;define("ember-qunit/isolated-container",
   ["./test-resolver","ember","exports"],
